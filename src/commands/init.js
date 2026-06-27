@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { SuperPlaneClient } from '../superplane/client.js';
@@ -156,39 +156,60 @@ export async function runInit(options = {}) {
       targetRepo:       existing.targetRepo || 'superplanehq/superplane',
     });
 
-    // ── Auto-register MCP ───────────────────────────────────────────────────
-    console.log(chalk.dim('\n  Registering MCP server…'));
+    // ── Auto-register MCP in every known agent ──────────────────────────────
+    console.log(chalk.dim('\n  Registering MCP server in AI agents…'));
 
-    // Claude Code
+    // 1. Claude Code
     try {
-      execSync('claude mcp add software-factory -- npx software-factory mcp 2>/dev/null || claude mcp add software-factory npx software-factory mcp', { stdio: 'pipe' });
-      console.log(chalk.green('  ✔ Claude Code: registered'));
+      execSync('claude mcp add software-factory -- npx software-factory mcp', { stdio: 'pipe' });
+      console.log(chalk.green('  ✔ Claude Code'));
     } catch {
-      // Not installed or already registered — both fine
-      console.log(chalk.dim('  · Claude Code: run manually if needed → claude mcp add software-factory -- npx software-factory mcp'));
+      console.log(chalk.dim('  · Claude Code: not found (run manually: claude mcp add software-factory -- npx software-factory mcp)'));
     }
 
-    // ~/.mcp.json for Codex / OpenCode / any MCP agent
+    // 2. OpenCode — ~/opencode.json (global config, format: { mcp: { name: { type, command } } })
+    try {
+      const ocPath = join(homedir(), 'opencode.json');
+      let ocConfig = {};
+      try { ocConfig = JSON.parse(readFileSync(ocPath, 'utf8')); } catch {}
+      ocConfig.mcp = ocConfig.mcp || {};
+      ocConfig.mcp['software-factory'] = { type: 'local', command: ['npx', 'software-factory', 'mcp'] };
+      if (!ocConfig['$schema']) ocConfig = { '$schema': 'https://opencode.ai/config.json', ...ocConfig };
+      writeFileSync(ocPath, JSON.stringify(ocConfig, null, 2) + '\n');
+      console.log(chalk.green('  ✔ OpenCode (~/opencode.json)'));
+    } catch {
+      console.log(chalk.dim('  · OpenCode: could not write ~/opencode.json'));
+    }
+
+    // 3. ~/.mcp.json — standard format for Codex, Cursor, and other MCP-compatible agents
     try {
       const mcpPath = join(homedir(), '.mcp.json');
-      const mcpConfig = {
-        mcpServers: {
-          'software-factory': { command: 'npx', args: ['software-factory', 'mcp'] },
-        },
-      };
+      let mcpConfig = {};
+      try { mcpConfig = JSON.parse(readFileSync(mcpPath, 'utf8')); } catch {}
+      mcpConfig.mcpServers = mcpConfig.mcpServers || {};
+      mcpConfig.mcpServers['software-factory'] = { command: 'npx', args: ['software-factory', 'mcp'] };
       writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
-      console.log(chalk.green('  ✔ Codex / OpenCode: ~/.mcp.json written'));
+      console.log(chalk.green('  ✔ Codex / Cursor (~/.mcp.json)'));
     } catch {
       console.log(chalk.dim('  · ~/.mcp.json: could not write'));
     }
 
     // ── Done ────────────────────────────────────────────────────────────────
     console.log(chalk.bold.cyan('\n✅ Software Factory is ready!\n'));
-    console.log('  Open your AI agent (Claude Code, OpenCode, Codex) and say:\n');
-    console.log(chalk.bold.white('  "Use software-factory tools to build and deploy this:'));
-    console.log(chalk.cyan('   https://github.com/owner/repo"\n'));
-    console.log(chalk.dim('  The agent will read the spec, write the code,'));
-    console.log(chalk.dim('  deploy to Render, and open a PR — automatically.\n'));
+    console.log(chalk.bold('  ─── Now open OpenCode (or Claude Code / Codex) ───\n'));
+    console.log('  Paste this prompt with your GitHub URL:\n');
+    console.log(chalk.bgBlue.white.bold(
+      '  Use software-factory tools to build and deploy this:  '
+    ));
+    console.log(chalk.cyan.bold('  https://github.com/your-username/your-repo\n'));
+    console.log(chalk.dim('  The repo needs a SPEC.md, spec.md, PROMPT.md, or README.md'));
+    console.log(chalk.dim('  describing what to build. The agent will:'));
+    console.log(chalk.dim('    1. Read the spec from GitHub'));
+    console.log(chalk.dim('    2. Explore and understand the codebase'));
+    console.log(chalk.dim('    3. Write the code + tests'));
+    console.log(chalk.dim('    4. Push a new branch to GitHub'));
+    console.log(chalk.dim('    5. Deploy live to Render (~20s)'));
+    console.log(chalk.dim('    6. Open a PR with the live URL\n'));
     console.log(chalk.dim(`  Canvas: https://app.superplane.com/canvases/${canvasId}`));
     console.log(chalk.dim('  Docs:   https://github.com/hongchengw/superplane-render-nyc-hack\n'));
 
