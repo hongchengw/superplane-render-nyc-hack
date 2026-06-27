@@ -1,0 +1,44 @@
+{
+  "name": "software-factory",
+  "version": "0.1.0",
+  "description": "Overnight Software Factory: Give it a GitHub issue, wake up to a deployed PoC. Powered by SuperPlane + Render.",
+  "bin": {
+    "factory": "./bin/factory.js"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "files": [
+    "bin/",
+    "src/"
+  ],
+  "scripts": {
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "prepublishOnly": "node -e \"console.log('Publishing software-factory...')\""
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "inquirer": "^9.3.7",
+    "ora": "^8.1.1",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "superplane",
+    "render",
+    "software-factory",
+    "ai",
+    "automation",
+    "devops",
+    "llm",
+    "github"
+  ],
+  "author": "SuperPlane Hackathon Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/superplanehq/software-factory"
+  }
+}
