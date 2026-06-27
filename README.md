@@ -6,8 +6,8 @@
 
 [![npm version](https://img.shields.io/npm/v/software-factory?style=flat-square&color=CB3837&logo=npm)](https://www.npmjs.com/package/software-factory)
 [![npm downloads](https://img.shields.io/npm/dm/software-factory?style=flat-square&color=CB3837&logo=npm)](https://www.npmjs.com/package/software-factory)
-[![GitHub stars](https://img.shields.io/github/stars/roshaninfordham/software-factory?style=flat-square&logo=github)](https://github.com/roshaninfordham/software-factory/stargazers)
-[![GitHub license](https://img.shields.io/github/license/roshaninfordham/software-factory?style=flat-square)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/hongchengw/superplane-render-nyc-hack?style=flat-square&logo=github)](https://github.com/hongchengw/superplane-render-nyc-hack/stargazers)
+[![GitHub license](https://img.shields.io/github/license/hongchengw/superplane-render-nyc-hack?style=flat-square)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
 [![Powered by SuperPlane](https://img.shields.io/badge/powered%20by-SuperPlane-7fe2b4?style=flat-square)](https://superplane.com)
 [![Deploy on Render](https://img.shields.io/badge/deploy-Render-46E3B7?style=flat-square&logo=render)](https://render.com)
@@ -155,7 +155,7 @@ factory build https://github.com/superplanehq/superplane/issues/5705  # Canvas w
 
 <div align="center">
 
-[![Star History Chart](https://api.star-history.com/svg?repos=roshaninfordham/software-factory&type=Date)](https://star-history.com/#roshaninfordham/software-factory&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=hongchengw/superplane-render-nyc-hack&type=Date)](https://star-history.com/#hongchengw/superplane-render-nyc-hack&Date)
 
 </div>
 
@@ -166,8 +166,8 @@ factory build https://github.com/superplanehq/superplane/issues/5705  # Canvas w
 PRs welcome. The pipeline itself lives in `src/superplane/canvas-template.js` — that's where you'd extend stages, add retry logic, or wire in new integrations.
 
 ```bash
-git clone https://github.com/roshaninfordham/software-factory
-cd software-factory
+git clone https://github.com/hongchengw/superplane-render-nyc-hack
+cd superplane-render-nyc-hack
 npm install
 node bin/factory.js --help
 ```
@@ -176,7 +176,7 @@ node bin/factory.js --help
 
 ## License
 
-MIT © [Roshan Sharma](https://github.com/roshaninfordham)
+MIT © [Roshan Sharma](https://github.com/hongchengw)
 
 ---
 
