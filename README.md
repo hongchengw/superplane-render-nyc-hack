@@ -25,11 +25,55 @@ Built at the **SuperPlane Hackathon: Bash Script Funeral /w Render** · NYC, Jun
 ## Quick Start
 
 ```bash
+# 1. Install & configure (one time)
 npx software-factory init
-npx software-factory build https://github.com/owner/repo/issues/42
+
+# 2. Build any GitHub issue — pipeline runs in ~15–25 min
+npx software-factory build https://github.com/superplanehq/superplane/issues/5368 --follow
 ```
 
-The pipeline runs in SuperPlane overnight. Next morning, a PR with a live Render preview URL is posted to the issue.
+`--follow` streams live stage progress and prints the Render preview URL + PR link the moment they're ready.
+
+## AI Agent Setup (MCP)
+
+Connect software-factory to Claude Code, Codex, OpenCode, or any MCP-compatible agent in 30 seconds:
+
+**Claude Code:**
+```bash
+claude mcp add software-factory -- npx software-factory mcp
+```
+
+**Any MCP-compatible agent** — add to your agent config:
+```json
+{
+  "mcpServers": {
+    "software-factory": {
+      "command": "npx",
+      "args": ["software-factory", "mcp"]
+    }
+  }
+}
+```
+
+Then in your agent, tools are available instantly:
+
+| Tool | What it does |
+|------|-------------|
+| `build_issue` | Trigger the full pipeline for any GitHub issue URL |
+| `get_status` | Live stage-by-stage progress + preview URL when ready |
+| `list_runs` | Recent pipeline runs |
+| `get_logs` | Per-stage execution output |
+| `doctor` | Check configuration health |
+
+**Example agent prompt:**
+```
+Use the software-factory MCP tools to implement:
+https://github.com/superplanehq/superplane/issues/5368
+
+1. Call build_issue with that URL
+2. Call get_status every 30 seconds until the run completes
+3. Report the preview URL and PR link when done
+```
 
 ---
 
