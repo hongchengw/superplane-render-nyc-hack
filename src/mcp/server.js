@@ -723,7 +723,7 @@ async function handle(req) {
   if (method === 'initialize') {
     return ok(id, {
       protocolVersion: '2024-11-05',
-      serverInfo: { name: 'software-factory', version: '0.1.7' },
+      serverInfo: { name: 'software-factory', version: '0.1.8' },
       capabilities: { tools: {} },
     });
   }

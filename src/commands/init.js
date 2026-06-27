@@ -1,29 +1,17 @@
 import chalk from 'chalk';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { SuperPlaneClient } from '../superplane/client.js';
 import { buildCanvasSpec } from '../superplane/canvas-template.js';
 import { loadConfig, saveConfig } from '../config.js';
 
-function normalizeRepo(input) {
-  if (!input) return '';
-  const httpsMatch = input.match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?\/?$/);
-  if (httpsMatch) return httpsMatch[1];
-  const shortMatch = input.match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/);
-  if (shortMatch) return shortMatch[1];
-  return input.replace(/\.git$/, '');
-}
-
-function ask(rl, question, defaultVal, envVar) {
-  const envVal = envVar ? process.env[envVar] : undefined;
-  if (envVal) return Promise.resolve(envVal);
-  if (!rl || rl._closed) return Promise.resolve(defaultVal || '');
+// Only prompt for a value if it isn't already set
+function prompt(rl, question) {
   return new Promise(resolve => {
-    const hint = defaultVal ? chalk.dim(` [${defaultVal}]`) : '';
-    rl.question(`${question}${hint}: `, answer => resolve(answer.trim() || defaultVal || ''));
+    rl.question(question, answer => resolve(answer.trim()));
   });
 }
 
@@ -33,182 +21,176 @@ async function upsertSecret(client, name, value) {
     const exists = await client.secretExists(name);
     if (exists) {
       await client.setSecretKey(name, 'value', value);
-      console.log(chalk.green(`  ✔ Secret "${name}" updated`));
     } else {
       await client.createSecret(name, value);
-      console.log(chalk.green(`  ✔ Secret "${name}" created`));
     }
   } catch (e) {
-    console.log(chalk.yellow(`  ⚠ Could not set secret "${name}": ${e.message}`));
+    // non-fatal — secrets are nice-to-have for autonomous mode
+    process.stderr.write(`  warn: could not set secret "${name}": ${e.message}\n`);
+  }
+}
+
+async function getOrCreateCanvas(client, canvasId, targetRepo) {
+  // Reuse existing canvas if we have its ID
+  if (canvasId) {
+    try {
+      await client.getCanvas(canvasId);
+      return canvasId;
+    } catch {}
+  }
+
+  // Try to create a new one
+  try {
+    const spec = buildCanvasSpec({ targetRepo });
+    const { canvas } = await client.createCanvas('software-factory', spec);
+    return canvas.metadata.id;
+  } catch (e) {
+    if (e.message.includes('409') || e.message.toLowerCase().includes('already exists')) {
+      // Canvas with this name exists — find it
+      try {
+        const { canvases } = await client.listCanvases();
+        const found = (canvases || []).find(c => c.metadata?.name === 'software-factory');
+        if (found) return found.metadata.id;
+      } catch {}
+    }
+    throw e;
   }
 }
 
 export async function runInit(options = {}) {
+  const existing = loadConfig();
+
+  // Pre-fill from env or existing config
+  let spKey    = existing.superplaneApiKey || process.env.SUPERPLANE_TOKEN || '';
+  let ghToken  = existing.githubToken      || process.env.GITHUB_TOKEN     || '';
+  let renderKey= existing.renderKey        || process.env.RENDER_API_KEY   || '';
+
   const nonInteractive = options.yes || process.env.FACTORY_YES === '1';
-  const rl = nonInteractive
-    ? null
-    : createInterface({ input: process.stdin, output: process.stdout });
 
   console.log(chalk.bold.cyan('\n🏭 Software Factory — Setup\n'));
 
-  if (nonInteractive) {
-    console.log(chalk.dim('  Non-interactive mode: reading from environment variables\n'));
+  const missing = [];
+  if (!spKey)     missing.push('SuperPlane token');
+  if (!ghToken)   missing.push('GitHub token');
+  if (!renderKey) missing.push('Render API key');
+
+  if (missing.length === 0) {
+    console.log(chalk.dim('  All keys already configured. Verifying…\n'));
+  } else if (nonInteractive) {
+    console.error(chalk.red(`Missing required keys: ${missing.join(', ')}\n`));
+    console.error('Set them as environment variables:');
+    console.error('  SUPERPLANE_TOKEN, GITHUB_TOKEN, RENDER_API_KEY\n');
+    process.exit(1);
   } else {
-    console.log([
-      '  3 things needed: SuperPlane token · GitHub token · Render API key',
-      '  No Anthropic key required — your AI agent handles code generation.',
-      '',
-    ].join('\n'));
+    console.log(`  Need ${missing.length} key${missing.length > 1 ? 's' : ''}:\n`);
   }
 
-  const existing = loadConfig();
+  const rl = (missing.length > 0 && !nonInteractive)
+    ? createInterface({ input: process.stdin, output: process.stdout })
+    : null;
 
   try {
-    // ── 1. SuperPlane ───────────────────────────────────────────────────────
-    console.log(chalk.bold('1. SuperPlane'));
-    const spKey = await ask(rl, '  API token (app.superplane.com → Profile → API Tokens)',
-      existing.superplaneApiKey, 'SUPERPLANE_TOKEN');
     if (!spKey) {
-      console.error(chalk.red('SuperPlane API token is required.'));
-      rl?.close();
-      process.exit(1);
+      spKey = await prompt(rl, `  SuperPlane API token\n  → app.superplane.com → Profile → API Tokens\n  Token: `);
     }
 
+    // Verify SuperPlane immediately
+    process.stdout.write('  Connecting to SuperPlane… ');
     const client = new SuperPlaneClient(spKey);
-    process.stdout.write('  Verifying… ');
     const me = await client.getMe();
-    console.log(chalk.green(`✔ Connected as ${me.user?.name || me.user?.id}`));
+    console.log(chalk.green(`✔ ${me.user?.name || me.user?.id}`));
 
-    // ── 2. GitHub ───────────────────────────────────────────────────────────
-    console.log(chalk.bold('\n2. GitHub'));
-    const githubToken = await ask(rl,
-      '  Personal access token (github.com → Settings → Developer → PATs, needs repo scope)',
-      existing.githubToken || '', 'GITHUB_TOKEN');
+    if (!ghToken) {
+      console.log('');
+      ghToken = await prompt(rl, `  GitHub personal access token\n  → github.com → Settings → Developer settings → PATs (repo scope)\n  Token: `);
+    }
 
-    if (githubToken) {
+    if (ghToken) {
       try {
         const res = await fetch('https://api.github.com/user', {
-          headers: { Authorization: `Bearer ${githubToken}`, 'User-Agent': 'software-factory' },
+          headers: { Authorization: `Bearer ${ghToken}`, 'User-Agent': 'software-factory' },
         });
         if (res.ok) {
-          const user = await res.json();
-          console.log(chalk.green(`  ✔ Authenticated as @${user.login}`));
+          const u = await res.json();
+          console.log(chalk.green(`  ✔ GitHub: @${u.login}`));
         }
       } catch {}
     }
 
-    // ── 3. Render ───────────────────────────────────────────────────────────
-    console.log(chalk.bold('\n3. Render'));
-    console.log(chalk.dim('  Get your key: https://dashboard.render.com/u/settings → API Keys'));
-    const renderKey = await ask(rl, '  Render API key',
-      existing.renderKey || '', 'RENDER_API_KEY');
-    const renderServiceId = await ask(rl, '  Render service ID (optional — leave blank to auto-create per deployment)',
-      existing.renderServiceId || '', 'RENDER_SERVICE_ID');
+    if (!renderKey) {
+      console.log('');
+      renderKey = await prompt(rl, `  Render API key\n  → dashboard.render.com/u/settings → API Keys\n  Key: `);
+    }
 
-    // ── 4. Target Repo (optional) ───────────────────────────────────────────
-    console.log(chalk.bold('\n4. Default Target Repository'));
-    const rawRepo = await ask(rl,
-      '  GitHub repo to build for (owner/repo or URL)',
-      existing.targetRepo || 'superplanehq/superplane', 'FACTORY_TARGET_REPO');
-    const targetRepo = normalizeRepo(rawRepo);
-    if (rawRepo !== targetRepo) console.log(chalk.dim(`  → normalized to: ${targetRepo}`));
-
-    // ── 5. Anthropic key (optional — for autonomous mode only) ──────────────
-    console.log(chalk.bold('\n5. Anthropic API Key') + chalk.dim(' (optional)'));
-    console.log(chalk.dim('  Only needed for autonomous mode (factory build without an AI agent).'));
-    console.log(chalk.dim('  If you use Claude Code, Codex, or OpenCode — skip this.'));
-    const anthropicKey = await ask(rl,
-      '  Anthropic API key (press Enter to skip)',
-      '', 'ANTHROPIC_API_KEY');
+    if (renderKey) {
+      try {
+        await fetch('https://api.render.com/v1/owners?limit=1', {
+          headers: { Authorization: `Bearer ${renderKey}` },
+        });
+        console.log(chalk.green('  ✔ Render: connected'));
+      } catch {}
+    }
 
     // ── Store secrets in SuperPlane ─────────────────────────────────────────
-    console.log(chalk.bold('\nStoring in SuperPlane…'));
-    if (githubToken) await upsertSecret(client, 'github-token', githubToken);
-    if (renderKey) await upsertSecret(client, 'render-api-key', renderKey);
-    if (anthropicKey) await upsertSecret(client, 'anthropic-api-key', anthropicKey);
+    console.log(chalk.dim('\n  Storing secrets in SuperPlane…'));
+    await upsertSecret(client, 'github-token',      ghToken);
+    await upsertSecret(client, 'render-api-key',    renderKey);
+    await upsertSecret(client, 'render-service-id', existing.renderServiceId || 'srv-d902b8e8bjmc738r0920');
+    console.log(chalk.green('  ✔ Secrets stored'));
 
     // ── Canvas ──────────────────────────────────────────────────────────────
-    let canvasId = existing.canvasId;
-    if (!canvasId) {
-      console.log(chalk.bold('\nCreating SuperPlane canvas…'));
-      const spec = buildCanvasSpec({
-        targetRepo,
-        githubTokenSecret: 'github-token',
-        renderApiKeySecret: 'render-api-key',
-        anthropicApiKeySecret: 'anthropic-api-key',
-        renderServiceId: renderServiceId || undefined,
-      });
-      const { canvas } = await client.createCanvas('software-factory', spec);
-      canvasId = canvas.metadata.id;
-      console.log(chalk.green(`  ✔ Canvas created (${canvasId})`));
-      console.log(chalk.dim(`    https://app.superplane.com/canvases/${canvasId}`));
-    } else {
-      console.log(chalk.dim(`\n  Using existing canvas: ${canvasId.slice(0, 8)}…`));
-    }
+    process.stdout.write('  Setting up SuperPlane canvas… ');
+    const canvasId = await getOrCreateCanvas(client, existing.canvasId, existing.targetRepo || 'superplanehq/superplane');
+    console.log(chalk.green(`✔ ${canvasId.slice(0, 8)}…`));
 
-    // ── Save ────────────────────────────────────────────────────────────────
+    // ── Save config ─────────────────────────────────────────────────────────
     saveConfig({
       superplaneApiKey: spKey,
+      githubToken:      ghToken,
+      renderKey,
+      renderServiceId:  existing.renderServiceId || 'srv-d902b8e8bjmc738r0920',
       canvasId,
-      canvasName: 'software-factory',
+      canvasName:       'software-factory',
       canvasTriggerNodeId: 'start',
-      canvasTemplateName: 'Build Issue',
-      targetRepo,
-      githubToken: githubToken || existing.githubToken,
-      renderKey: renderKey || existing.renderKey,
-      renderServiceId: renderServiceId || existing.renderServiceId,
+      canvasTemplateName:  'Build Issue',
+      targetRepo:       existing.targetRepo || 'superplanehq/superplane',
     });
 
-    console.log(chalk.green('\n✔ Configuration saved to ~/.factory/config.json'));
-
-    // ── Auto-register MCP server ────────────────────────────────────────────
-    console.log(chalk.bold('\nWiring up MCP server…'));
+    // ── Auto-register MCP ───────────────────────────────────────────────────
+    console.log(chalk.dim('\n  Registering MCP server…'));
 
     // Claude Code
-    let claudeOk = false;
     try {
-      execSync('claude mcp add software-factory -- npx software-factory mcp', { stdio: 'pipe' });
-      console.log(chalk.green('  ✔ Claude Code: MCP registered (claude mcp add software-factory)'));
-      claudeOk = true;
+      execSync('claude mcp add software-factory -- npx software-factory mcp 2>/dev/null || claude mcp add software-factory npx software-factory mcp', { stdio: 'pipe' });
+      console.log(chalk.green('  ✔ Claude Code: registered'));
     } catch {
-      console.log(chalk.dim('  · Claude Code not found or already registered'));
+      // Not installed or already registered — both fine
+      console.log(chalk.dim('  · Claude Code: run manually if needed → claude mcp add software-factory -- npx software-factory mcp'));
     }
 
-    // Write ~/.mcp.json for Codex / OpenCode / any MCP-compatible agent
+    // ~/.mcp.json for Codex / OpenCode / any MCP agent
     try {
+      const mcpPath = join(homedir(), '.mcp.json');
       const mcpConfig = {
         mcpServers: {
-          'software-factory': {
-            command: 'npx',
-            args: ['software-factory', 'mcp'],
-          },
+          'software-factory': { command: 'npx', args: ['software-factory', 'mcp'] },
         },
       };
-      const mcpPath = join(homedir(), '.mcp.json');
       writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
-      console.log(chalk.green(`  ✔ Codex/OpenCode: ~/.mcp.json written`));
+      console.log(chalk.green('  ✔ Codex / OpenCode: ~/.mcp.json written'));
     } catch {
-      console.log(chalk.dim('  · Could not write ~/.mcp.json'));
+      console.log(chalk.dim('  · ~/.mcp.json: could not write'));
     }
 
-    console.log(chalk.bold.cyan('\n🏭 Software Factory is ready!\n'));
-    console.log('  Give your AI agent a GitHub URL and say:\n');
-    console.log(chalk.bold('  "Use software-factory tools to build and deploy this:"'));
-    console.log(chalk.cyan('  https://github.com/owner/repo'));
-    console.log(chalk.dim('  (repo with SPEC.md, a specific .md file, or an issue URL)\n'));
-    console.log(chalk.bold('The agent will:'));
-    console.log('  1. fetch_github_spec   — read the spec/issue');
-    console.log('  2. get_repo_structure  — explore the codebase');
-    console.log('  3. [write code]        — implement it');
-    console.log('  4. push_branch         — push to GitHub');
-    console.log('  5. deploy_preview      — get a live Render URL in ~20s');
-    console.log('  6. create_pr           — open PR + post preview link\n');
-    if (!claudeOk) {
-      console.log(chalk.bold('Manual MCP setup (one time per agent):'));
-      console.log(`  Claude Code: ${chalk.cyan('claude mcp add software-factory -- npx software-factory mcp')}`);
-      console.log(`  Codex/OpenCode: ${chalk.cyan('~/.mcp.json already written ✔')}\n`);
-    }
-    console.log(chalk.dim(`Canvas: https://app.superplane.com/canvases/${canvasId}\n`));
+    // ── Done ────────────────────────────────────────────────────────────────
+    console.log(chalk.bold.cyan('\n✅ Software Factory is ready!\n'));
+    console.log('  Open your AI agent (Claude Code, OpenCode, Codex) and say:\n');
+    console.log(chalk.bold.white('  "Use software-factory tools to build and deploy this:'));
+    console.log(chalk.cyan('   https://github.com/owner/repo"\n'));
+    console.log(chalk.dim('  The agent will read the spec, write the code,'));
+    console.log(chalk.dim('  deploy to Render, and open a PR — automatically.\n'));
+    console.log(chalk.dim(`  Canvas: https://app.superplane.com/canvases/${canvasId}`));
+    console.log(chalk.dim('  Docs:   https://github.com/hongchengw/superplane-render-nyc-hack\n'));
 
   } finally {
     rl?.close();
