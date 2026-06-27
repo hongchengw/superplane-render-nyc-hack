@@ -18,7 +18,7 @@ program
     '  Powered by SuperPlane (orchestration) + Render (deployment).\n' +
     '  Every issue becomes: spec → code → tests → deployed preview → PR.\n'
   )
-  .version('0.1.4');
+  .version('0.1.5');
 
 program
   .command('init')

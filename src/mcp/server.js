@@ -353,8 +353,8 @@ async function impl_pushBranch({ repo, branch, base_branch = 'main', files, comm
   ].join('\n');
 }
 
-async function impl_deployPreview({ repo, branch, service_name, build_command = 'npm install', start_command = 'npm start' }) {
-  const { renderKey, renderSvcId } = getConfig();
+async function impl_deployPreview({ repo, branch, service_name, build_command, start_command }) {
+  const { renderKey } = getConfig();
   if (!renderKey) throw new Error(
     'Render API key not configured.\n' +
     'Run: factory init  (and enter your Render API key)\n' +
@@ -362,91 +362,95 @@ async function impl_deployPreview({ repo, branch, service_name, build_command = 
     'Get your key at: https://dashboard.render.com/u/settings → API Keys'
   );
 
-  let serviceId = renderSvcId;
+  const cfg = getConfig();
+  let serviceId = cfg.renderServiceId || process.env.RENDER_SERVICE_ID;
   let serviceUrl;
-  const name = service_name || `factory-${branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase().slice(0, 40)}`;
+  const name = service_name || 'software-factory-poc';
+
+  if (!serviceId) {
+    // Look up by name
+    try {
+      const all = await renderRequest('GET', '/services?limit=20', null, renderKey);
+      const found = all.find(s => (s.service || s).name === name);
+      if (found) serviceId = (found.service || found).id;
+    } catch {}
+  }
 
   if (serviceId) {
-    // Update existing service to deploy this branch
-    const owners = await renderRequest('GET', '/owners?limit=1', null, renderKey);
-    const ownerId = owners?.[0]?.owner?.id;
-
-    await renderRequest('PATCH', `/services/${serviceId}`, {
-      branch,
-      autoDeploy: 'yes',
-    }, renderKey);
-
+    // Update branch on existing service
+    await renderRequest('PATCH', `/services/${serviceId}`, { branch }, renderKey);
     const svcInfo = await renderRequest('GET', `/services/${serviceId}`, null, renderKey);
     serviceUrl = svcInfo.service?.serviceDetails?.url || svcInfo.serviceDetails?.url;
   } else {
-    // Create new service
+    // Create a new static site (free — no payment card needed)
     const owners = await renderRequest('GET', '/owners?limit=1', null, renderKey);
     const ownerId = owners?.[0]?.owner?.id;
     if (!ownerId) throw new Error('Could not get Render owner ID');
 
     const svc = await renderRequest('POST', '/services', {
-      type: 'web_service',
+      type: 'static_site',
       name,
       ownerId,
       repo: `https://github.com/${repo}`,
       branch,
-      autoDeploy: 'yes',
+      rootDir: 'poc/public',
       serviceDetails: {
-        env: 'node',
-        buildCommand: build_command,
-        startCommand: start_command,
-        plan: 'starter',
-        region: 'oregon',
+        buildCommand: build_command || '',
+        publishPath: '.',
       },
     }, renderKey);
 
     serviceId = svc.service?.id || svc.id;
     serviceUrl = svc.service?.serviceDetails?.url || svc.serviceDetails?.url;
+
+    // Persist so future calls skip creation
+    const { loadConfig: lc, saveConfig: sc } = await import('../config.js');
+    const existing = lc();
+    sc({ ...existing, renderServiceId: serviceId });
   }
 
   if (!serviceId) throw new Error('Failed to get Render service ID');
 
-  // Trigger deploy
+  // Trigger the deploy
   const deploy = await renderRequest('POST', `/services/${serviceId}/deploys`, {
     clearCache: 'do_not_clear',
   }, renderKey);
   const deployId = deploy.deploy?.id || deploy.id;
 
+  process.stderr.write(`[factory] Deploy triggered (${serviceId} / ${deployId})...\n`);
   const started = Date.now();
-  process.stderr.write(`[factory] Deploying to Render (service: ${serviceId})...\n`);
 
-  // Poll for completion (up to 12 minutes)
+  // Poll — static sites are live in ~20s, web services ~2–3 min
   for (let i = 0; i < 72; i++) {
-    await new Promise(r => setTimeout(r, 10000));
+    await new Promise(r => setTimeout(r, 8000));
     try {
       const status = await renderRequest('GET', `/services/${serviceId}/deploys/${deployId}`, null, renderKey);
       const s = status.deploy?.status || status.status;
-      process.stderr.write(`[factory] Deploy status: ${s} (${fmtMs(Date.now() - started)})\n`);
+      process.stderr.write(`[factory] ${s} (${fmtMs(Date.now() - started)})\n`);
 
       if (s === 'live') {
         const svcInfo = await renderRequest('GET', `/services/${serviceId}`, null, renderKey);
         const url = svcInfo.service?.serviceDetails?.url || svcInfo.serviceDetails?.url || serviceUrl;
         return [
-          `✅ Deployed to Render!`,
+          `✅ Live on Render!`,
           ``,
-          `Preview URL: ${url}`,
-          `Service ID:  ${serviceId}`,
-          `Deploy ID:   ${deployId}`,
-          `Time:        ${fmtMs(Date.now() - started)}`,
+          `🚀 Preview URL: ${url}`,
+          `Service:        ${serviceId}`,
+          `Deploy:         ${deployId}`,
+          `Time:           ${fmtMs(Date.now() - started)}`,
           ``,
           `Next: Call create_pr to open a pull request with this preview URL.`,
         ].join('\n');
       }
       if (s === 'failed' || s === 'canceled') {
-        throw new Error(`Render deployment ${s} after ${fmtMs(Date.now() - started)}`);
+        throw new Error(`Render deploy ${s} after ${fmtMs(Date.now() - started)}`);
       }
     } catch (e) {
       if (e.message.includes('failed') || e.message.includes('canceled')) throw e;
-      // Network blip — keep polling
     }
   }
 
-  throw new Error(`Deployment timed out after 12 minutes. Check: https://dashboard.render.com`);
+  throw new Error(`Deploy timed out after ~10 minutes. Check: https://dashboard.render.com`);
 }
 
 async function impl_getDeployStatus({ service_id, deploy_id }) {
@@ -654,7 +658,7 @@ async function handle(req) {
   if (method === 'initialize') {
     return ok(id, {
       protocolVersion: '2024-11-05',
-      serverInfo: { name: 'software-factory', version: '0.1.4' },
+      serverInfo: { name: 'software-factory', version: '0.1.5' },
       capabilities: { tools: {} },
     });
   }

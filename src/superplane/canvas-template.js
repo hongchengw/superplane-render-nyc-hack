@@ -439,41 +439,37 @@ exit $EXIT_CODE
       position: { x: 1280, y: 0 },
     },
 
-    // ── 6. Deploy to Render ────────────────────────────────────────────────
-    ...(renderIntegrationId && renderServiceId
-      ? [{
-          id: 'render-deploy',
-          name: 'Deploy to Render',
-          type: 'TYPE_ACTION',
-          component: 'render.deploy',
-          integration: { id: renderIntegrationId },
-          configuration: {
-            service: renderServiceId,
-            clearCache: false,
-          },
-          position: { x: 1600, y: 0 },
-        }]
-      : [{
-          id: 'render-deploy',
-          name: 'Deploy to Render',
-          type: 'TYPE_ACTION',
-          component: 'runnerBash',
-          configuration: {
-            machine_type: machineType,
-            execution_mode: 'docker',
-            docker_image_preset: 'debian:bookworm-slim',
-            enable_setup_commands: true,
-            setup_commands: 'apt-get update -qq && apt-get install -y -qq curl jq',
-            script: `#!/usr/bin/env bash
+    // ── 6. Deploy to Render (via Render REST API) ─────────────────────────
+    {
+      id: 'render-deploy',
+      name: 'Deploy to Render',
+      type: 'TYPE_ACTION',
+      component: 'runnerBash',
+      configuration: {
+        machine_type: machineType,
+        execution_mode: 'docker',
+        docker_image_preset: 'debian:bookworm-slim',
+        enable_setup_commands: true,
+        setup_commands: 'apt-get update -qq && apt-get install -y -qq curl jq git',
+        script: `#!/usr/bin/env bash
 set -euo pipefail
 
 PAYLOAD=$(cat "$SUPERPLANE_PAYLOAD_FILE")
-extract() { echo "$PAYLOAD" | jq -r ".[0].result.$1 // .result.$1 // empty"; }
+extract() { echo "$PAYLOAD" | jq -r ".[0].result.$1 // .[1].result.$1 // .result.$1 // empty"; }
 REPO=$(extract repo)
 BRANCH=$(extract branch)
 ISSUE_NUMBER=$(extract issue_number)
 
-echo "Triggering Render deploy for service $RENDER_SERVICE_ID..."
+echo "=== Render Deployment ==="
+echo "Service: $RENDER_SERVICE_ID"
+echo "Branch:  $BRANCH"
+
+# Update the service branch (points Render at our new branch)
+curl -sf -X PATCH \\
+  "https://api.render.com/v1/services/$RENDER_SERVICE_ID" \\
+  -H "Authorization: Bearer $RENDER_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d "{\\"branch\\": \\"$BRANCH\\"}" > /dev/null
 
 # Trigger deploy
 DEPLOY_RESPONSE=$(curl -sf -X POST \\
@@ -482,47 +478,48 @@ DEPLOY_RESPONSE=$(curl -sf -X POST \\
   -H "Content-Type: application/json" \\
   -d '{"clearCache": "do_not_clear"}')
 
-DEPLOY_ID=$(echo "$DEPLOY_RESPONSE" | jq -r '.deploy.id // empty')
-echo "Deploy started: $DEPLOY_ID"
+DEPLOY_ID=$(echo "$DEPLOY_RESPONSE" | jq -r '.deploy.id // .id // empty')
+echo "Deploy triggered: $DEPLOY_ID"
 
-# Wait for deploy to complete (up to 10 minutes)
+# Poll until live (static sites: ~20s, web services: 1-3min)
 for i in $(seq 1 60); do
-  sleep 10
+  sleep 8
   STATUS=$(curl -sf \\
     "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/$DEPLOY_ID" \\
-    -H "Authorization: Bearer $RENDER_API_KEY" | jq -r '.deploy.status')
-  echo "[$i/60] Deploy status: $STATUS"
-  if [ "$STATUS" = "live" ]; then break; fi
+    -H "Authorization: Bearer $RENDER_API_KEY" | jq -r '.deploy.status // .status // "unknown"')
+  echo "[$i] $STATUS"
+  [ "$STATUS" = "live" ] && break
   if [ "$STATUS" = "failed" ] || [ "$STATUS" = "canceled" ]; then
-    echo "Deploy failed with status: $STATUS"
+    echo "Deploy $STATUS"
     exit 1
   fi
 done
 
-# Get service URL
-SERVICE_INFO=$(curl -sf \\
+# Get live URL
+SERVICE_URL=$(curl -sf \\
   "https://api.render.com/v1/services/$RENDER_SERVICE_ID" \\
-  -H "Authorization: Bearer $RENDER_API_KEY")
-SERVICE_URL=$(echo "$SERVICE_INFO" | jq -r '.service.serviceDetails.url // empty')
+  -H "Authorization: Bearer $RENDER_API_KEY" | jq -r '.service.serviceDetails.url // .serviceDetails.url // empty')
 
-echo "Deployed to: $SERVICE_URL"
+echo "Live at: $SERVICE_URL"
 
 jq -n \\
   --arg repo "$REPO" \\
   --arg branch "$BRANCH" \\
-  --argjson issue "$ISSUE_NUMBER" \\
+  --argjson issue "\${ISSUE_NUMBER:-0}" \\
   --arg deploy_id "$DEPLOY_ID" \\
   --arg url "$SERVICE_URL" \\
   '{repo: $repo, branch: $branch, issue_number: $issue, deploy_id: $deploy_id, preview_url: $url}' \\
   > "$SUPERPLANE_RESULT_FILE"
 `,
-            environment: [
-              ...env([['RENDER_API_KEY', renderApiKeySecret]]),
-              literal('RENDER_SERVICE_ID', renderServiceId || ''),
-            ],
-          },
-          position: { x: 1600, y: 0 },
-        }]),
+        environment: [
+          ...env([
+            ['RENDER_API_KEY', renderApiKeySecret],
+            ['RENDER_SERVICE_ID', 'render-service-id'],
+          ]),
+        ],
+      },
+      position: { x: 1600, y: 0 },
+    },
 
     // ── 7. Create PR + Comment ─────────────────────────────────────────────
     ...(githubIntegrationId
@@ -677,7 +674,8 @@ jq -n \\
         ]
       : [
           { sourceId: 'render-deploy', targetId: 'pr-agent', channel: 'passed' },
-        ]),
+        ]
+    ),
   ];
 
   return { nodes, edges };
