@@ -1,6 +1,6 @@
 {
   "name": "software-factory",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "Overnight Software Factory: Give it a GitHub issue, wake up to a deployed PoC. Powered by SuperPlane + Render.",
   "bin": {
     "factory": "bin/factory.js"

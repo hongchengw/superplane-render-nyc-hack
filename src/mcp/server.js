@@ -604,7 +604,7 @@ async function impl_pipelineStatus() {
   const { runs } = await client.listRuns(cfg.canvasId);
   if (!runs?.length) return 'No pipeline runs yet.';
 
-  const STAGES = ['start','fetch-issue','requirement-agent','implementation-agent','validation-agent','render-deploy','pr-agent'];
+  const STAGES = ['start','fetch-issue','requirement-agent','implementation-agent','validation-agent','render-deploy','pr-agent','create-pr'];
   const lines = [];
 
   for (const [i, run] of runs.slice(0, 3).entries()) {
@@ -616,12 +616,28 @@ async function impl_pipelineStatus() {
       : fmtMs(Date.now() - new Date(run.createdAt)) + ' (running)';
 
     lines.push(`[${i}] ${run.id.slice(0,8)}… ${run.state} (${dur})`);
+
+    let previewUrl = null;
+    let prUrl = null;
+
     for (const nodeId of STAGES) {
       const ex = byNode[nodeId];
       if (!ex) continue;
       const icon = ex.result === 'RESULT_PASSED' ? '✅' : ex.result === 'RESULT_FAILED' ? '❌' : '⟳';
       lines.push(`  ${icon} ${nodeId}`);
+
+      const result = ex.resultData || ex.outputs?.data?.[0]?.result;
+      if (nodeId === 'render-deploy' && ex.result === 'RESULT_PASSED') {
+        previewUrl = result?.preview_url || null;
+      }
+      if ((nodeId === 'pr-agent' || nodeId === 'create-pr') && ex.result === 'RESULT_PASSED') {
+        prUrl = result?.pr_url || result?.html_url || null;
+      }
     }
+
+    if (previewUrl) lines.push(`  🚀 Preview URL: ${previewUrl}`);
+    if (prUrl) lines.push(`  🔀 PR URL:      ${prUrl}`);
+
     if (i < 2) lines.push('');
   }
 

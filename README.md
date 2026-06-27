@@ -56,6 +56,31 @@ That's it. Three prompts, then MCP is auto-registered in your AI agent.
 
 ---
 
+## 🔌 SuperPlane & Render Integration & Capabilities
+
+The Software Factory is built on a tight, end-to-end integration between **SuperPlane** (for visual canvas orchestration) and **Render** (for instant, serverless web previews).
+
+### 🌌 SuperPlane: Canvas Orchestration & Secrets
+SuperPlane serves as the brain and coordinator of the factory:
+- **Visual Canvas Interface**: Displays the progress of your pipeline live. You can watch each stage (`fetch-issue` → `requirement-agent` → `implementation-agent` → `validation-agent` → `render-deploy` → `pr-agent`) complete in real-time.
+- **Agent Orchestration**: Connects Claude/GPT directly into bash runners to fetch specs, refactor/generate code, build the POC, and validate everything inside clean dockerized environments.
+- **Secure Secret Manager**: Encrypts and stores your GitHub Token and Render API Key organization-wide. Agents running inside SuperPlane fetch these keys securely without exposing them.
+- **Spec Updates**: Automatically updates canvas blueprints from your CLI template definitions, ensuring your remote pipeline always matches the latest local updates.
+
+### ⚡ Render: Autonomous Deploys & Previews
+Render acts as the instant hosting and preview engine for every PoC created:
+- **Instant Static Provisioning**: The first time you run a build for a repository, Render dynamically provisions a free static site mapping to your target branch.
+- **Redeployment in Seconds**: On repeat builds, Render updates the branch mapping and triggers an active static build instantly (~20s redeploys).
+- **Clean Root Mapping**: Serves static pages specifically from the `poc/public/` directory, isolating the hosted environment from the rest of your source code.
+- **Direct Preview Feedback**: Returns the live HTTPS URL back to the canvas runner, allowing it to be commented back on the original GitHub issue and PR.
+
+### 🏆 Capabilities & Features
+- **True Autonomous End-to-End Execution**: paste one GitHub issue URL and watch SuperPlane complete the entire requirement-to-PR cycle autonomously.
+- **Agent-First MCP Integration**: lets your local AI agent (Claude Code, OpenCode, Codex) leverage these backend primitives step-by-step.
+- **Dynamic Mermaid Diagram Visualizations**: automatically generates architectural/system design diagrams in your specifications, embeds them interactively inside the hosted POC pages, and links them directly inside GitHub PR descriptions.
+
+---
+
 ## 📐 How it works
 
 ### The 3-step journey

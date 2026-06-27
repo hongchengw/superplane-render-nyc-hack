@@ -31,30 +31,27 @@ async function upsertSecret(client, name, value) {
 }
 
 async function getOrCreateCanvas(client, canvasId, targetRepo) {
-  // Reuse existing canvas if we have its ID
-  if (canvasId) {
+  // Try to find the existing canvas named 'software-factory'
+  let existingId = canvasId;
+  try {
+    const { canvases } = await client.listCanvases();
+    const found = (canvases || []).find(c => c.name === 'software-factory' || c.metadata?.name === 'software-factory');
+    if (found) {
+      existingId = found.id || found.metadata?.id;
+    }
+  } catch {}
+
+  // If it exists, delete it first to ensure we refresh the spec/nodes/edges
+  if (existingId) {
     try {
-      await client.getCanvas(canvasId);
-      return canvasId;
+      await client.delete(`/canvases/${existingId}`);
     } catch {}
   }
 
-  // Try to create a new one
-  try {
-    const spec = buildCanvasSpec({ targetRepo });
-    const { canvas } = await client.createCanvas('software-factory', spec);
-    return canvas.metadata.id;
-  } catch (e) {
-    if (e.message.includes('409') || e.message.toLowerCase().includes('already exists')) {
-      // Canvas with this name exists — find it
-      try {
-        const { canvases } = await client.listCanvases();
-        const found = (canvases || []).find(c => c.metadata?.name === 'software-factory');
-        if (found) return found.metadata.id;
-      } catch {}
-    }
-    throw e;
-  }
+  // Create a new canvas with the latest spec
+  const spec = buildCanvasSpec({ targetRepo });
+  const { canvas } = await client.createCanvas('software-factory', spec);
+  return canvas.id || canvas.metadata?.id;
 }
 
 export async function runInit(options = {}) {

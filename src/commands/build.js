@@ -102,11 +102,14 @@ function renderProgress(runs) {
     console.log(`  ${icon} ${label.padEnd(26)} ${statusText}`);
 
     // Extract URLs from results
-    if (nodeId === 'render-deploy' && ex.result === 'RESULT_PASSED') {
-      previewUrl = ex.resultData?.preview_url || null;
-    }
-    if ((nodeId === 'pr-agent' || nodeId === 'create-pr') && ex.result === 'RESULT_PASSED') {
-      prUrl = ex.resultData?.pr_url || ex.resultData?.html_url || null;
+    if (ex.result === 'RESULT_PASSED') {
+      const resData = ex.resultData || ex.outputs?.data?.[0]?.result;
+      if (nodeId === 'render-deploy') {
+        previewUrl = resData?.preview_url || null;
+      }
+      if (nodeId === 'pr-agent' || nodeId === 'create-pr') {
+        prUrl = resData?.pr_url || resData?.html_url || null;
+      }
     }
   }
 

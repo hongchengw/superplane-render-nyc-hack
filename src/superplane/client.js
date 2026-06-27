@@ -39,6 +39,10 @@ export class SuperPlaneClient {
     return this.post('/canvases', { canvas: { metadata: { name }, spec } });
   }
 
+  async updateCanvas(canvasId, name, spec) {
+    return this.put(`/canvases/${canvasId}`, { canvas: { metadata: { id: canvasId, name }, spec } });
+  }
+
   async getCanvas(canvasId) { return this.get(`/canvases/${canvasId}`); }
 
   async listRuns(canvasId) { return this.get(`/canvases/${canvasId}/runs`); }
