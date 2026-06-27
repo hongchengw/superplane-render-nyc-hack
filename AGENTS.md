@@ -24,8 +24,14 @@ factory_doctor  →  trigger_autonomous_pipeline  →  get_pipeline_status (poll
 3. **`get_pipeline_status()`** — Monitor progress. Poll every 10–15 seconds until `STATE_FINISHED`.
    - Watch for each stage: `fetch-issue` → `requirement-agent` → `implementation-agent` → `validation-agent` → `render-deploy` → `pr-agent`
 4. **Report Results**:
-   - Extract the `🚀 Preview URL` and `🔀 PR URL` from the `get_pipeline_status` output.
-   - Present the links to the user along with a Mermaid architecture diagram from the spec.
+   - Extract the `🚀 Preview URL`, `🔀 PR URL`, and `🌐 SuperPlane Canvas URL` from the `get_pipeline_status` output.
+   - **Always present all three links** to the user so they can check the live app, the PR, and the live pipeline canvas:
+     ```
+     🚀 Preview:    https://factory-xyz.onrender.com
+     🔀 PR:         https://github.com/owner/repo/pull/42
+     🌐 SuperPlane: https://app.superplane.com/canvases/<canvas-id>
+     ```
+   - Also include a Mermaid architecture diagram from the spec if available.
 
 ---
 

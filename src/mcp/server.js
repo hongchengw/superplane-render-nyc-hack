@@ -618,16 +618,21 @@ async function impl_deployPreview({ repo, branch, root_dir = 'poc/public', servi
           const info = await renderRequest('GET', `/services/${serviceId}`, null, renderKey);
           serviceUrl = info.service?.serviceDetails?.url || info.serviceDetails?.url;
         }
+        const cfg = getConfig();
+        const canvasUrl = cfg.canvasId
+          ? `https://app.superplane.com/canvases/${cfg.canvasId}`
+          : null;
         return [
           `✅ Live on Render!`,
           ``,
-          `🚀 Preview URL: ${serviceUrl}`,
-          `Service:        ${name} (${serviceId})`,
-          `Deploy:         ${deployId}`,
-          `Time:           ${fmtMs(Date.now() - started)}`,
+          `🚀 Preview URL:  ${serviceUrl}`,
+          `Service:         ${name} (${serviceId})`,
+          `Deploy:          ${deployId}`,
+          `Time:            ${fmtMs(Date.now() - started)}`,
+          canvasUrl ? `🌐 SuperPlane:   ${canvasUrl}` : '',
           ``,
           `NEXT: Call create_pr to open a pull request with this preview URL.`,
-        ].join('\n');
+        ].filter(Boolean).join('\n');
       }
       if (s === 'failed' || s === 'canceled') {
         throw new Error(`Render deploy ${s} after ${fmtMs(Date.now() - started)}`);
@@ -706,12 +711,17 @@ async function impl_createPR({ repo, branch, base = 'main', title, body = '', is
     } catch {}
   }
 
+  const cfg2 = getConfig();
+  const canvasUrl2 = cfg2.canvasId
+    ? `https://app.superplane.com/canvases/${cfg2.canvasId}`
+    : null;
   return [
     `✅ Pull Request created!`,
     ``,
-    `PR:          ${prUrl}`,
-    `PR Number:   #${pr.number}`,
-    preview_url ? `Preview URL: ${preview_url}` : '',
+    `🔀 PR URL:      ${prUrl}`,
+    `   PR #${pr.number}`,
+    preview_url ? `🚀 Preview URL: ${preview_url}` : '',
+    canvasUrl2 ? `🌐 SuperPlane:  ${canvasUrl2}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -769,13 +779,22 @@ async function impl_pipelineStatus() {
 
     if (previewUrl) lines.push(`  🚀 Preview URL: ${previewUrl}`);
     if (prUrl)      lines.push(`  🔀 PR URL:      ${prUrl}`);
+    lines.push(`  🌐 SuperPlane:  https://app.superplane.com/canvases/${cfg.canvasId}`);
 
     // Summary for finished runs
     if (run.state === 'STATE_FINISHED') {
-      if (previewUrl && prUrl) {
-        lines.push(`  ✅ Pipeline complete!`);
+      if (previewUrl || prUrl) {
+        lines.push('');
+        lines.push('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        lines.push('  ✅  PIPELINE COMPLETE — Share these links:');
+        lines.push('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        if (previewUrl) lines.push(`  🚀  Preview:    ${previewUrl}`);
+        if (prUrl)      lines.push(`  🔀  PR:         ${prUrl}`);
+        lines.push(`  🌐  SuperPlane: https://app.superplane.com/canvases/${cfg.canvasId}`);
+        lines.push('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       } else if (run.result === 'RESULT_FAILED') {
         lines.push(`  ❌ Pipeline failed — check canvas for logs`);
+        lines.push(`  🌐 Canvas: https://app.superplane.com/canvases/${cfg.canvasId}`);
       }
     }
 
