@@ -2,7 +2,7 @@
 
 # 🏭 Software Factory
 
-**Give it a GitHub issue. Wake up to a deployed PoC.**
+**Give it a GitHub issue or repo. Get a deployed PoC.**
 
 [![npm version](https://img.shields.io/npm/v/software-factory?style=flat-square&color=CB3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/software-factory)
 [![npm downloads](https://img.shields.io/npm/dm/software-factory?style=flat-square&color=CB3837&logo=npm&logoColor=white)](https://www.npmjs.com/package/software-factory)
@@ -12,38 +12,100 @@
 [![Powered by SuperPlane](https://img.shields.io/badge/powered%20by-SuperPlane-7fe2b4?style=flat-square)](https://superplane.com)
 [![Deploy on Render](https://img.shields.io/badge/deploy-Render-46E3B7?style=flat-square&logo=render&logoColor=white)](https://render.com)
 
-*Autonomous 7-stage pipeline: fetch → spec → code → test → deploy → PR — zero human steps.*
+*Your AI coding agent implements the issue. Software Factory deploys it to Render and opens the PR.*
 
-Built at the **SuperPlane Hackathon: Bash Script Funeral /w Render** · NYC, June 27 2026
+Built at **SuperPlane Hackathon: Bash Script Funeral /w Render** · NYC, June 27 2026
 
-[**npm →**](https://www.npmjs.com/package/software-factory) · [**SuperPlane canvas →**](https://app.superplane.com) · [**Demo issues ↓**](#demo-issues)
+[**npm →**](https://www.npmjs.com/package/software-factory) · [**Demo issues ↓**](#demo-issues)
 
 </div>
 
 ---
 
-## Quick Start
+## What It Does
 
-```bash
-# 1. Install & configure (one time)
-npx software-factory init
+```
+You:     "Implement https://github.com/superplanehq/superplane/issues/5368"
 
-# 2. Build any GitHub issue — pipeline runs in ~15–25 min
-npx software-factory build https://github.com/superplanehq/superplane/issues/5368 --follow
+Agent:   fetch_github_issue  → reads the issue
+         get_repo_structure  → understands the codebase
+         ✍️  writes the implementation (agent's own AI)
+         push_branch         → pushes code to GitHub
+         deploy_preview      → deploys to Render, returns live URL
+         create_pr           → opens PR + comments preview URL on issue
+
+Result:  🚀 Preview: https://factory-issue-5368.onrender.com
+         🔀 PR: https://github.com/superplanehq/superplane/pull/999
 ```
 
-`--follow` streams live stage progress and prints the Render preview URL + PR link the moment they're ready.
+**The AI agent you're already using does the code.** Software Factory handles GitHub, Render, and SuperPlane — no Anthropic key required.
 
-## AI Agent Setup (MCP)
+---
 
-Connect software-factory to Claude Code, Codex, OpenCode, or any MCP-compatible agent in 30 seconds:
+## Install
 
-**Claude Code:**
 ```bash
+npm install -g software-factory
+# or use directly:
+npx software-factory
+```
+
+---
+
+## Setup (One Time)
+
+```bash
+npx software-factory init
+```
+
+You'll be asked for 3 things:
+
+| # | What | Where |
+|---|------|-------|
+| 1 | **SuperPlane API token** | [app.superplane.com](https://app.superplane.com) → Profile → API Tokens |
+| 2 | **GitHub personal access token** | [github.com](https://github.com) → Settings → Developer settings → PATs (`repo` scope) |
+| 3 | **Render API key** | [dashboard.render.com/u/settings](https://dashboard.render.com/u/settings) → API Keys |
+
+> **No Anthropic key needed.** Your AI agent (Claude Code, Codex, OpenCode) is already the AI — software-factory is the infrastructure layer.
+
+Or use environment variables for non-interactive setup:
+```bash
+export SUPERPLANE_TOKEN="TuovNZZl..."
+export GITHUB_TOKEN="ghp_..."
+export RENDER_API_KEY="rnd_..."
+
+npx software-factory init --yes
+```
+
+---
+
+## Using with Your AI Agent
+
+### Claude Code
+
+```bash
+# Register as MCP server (one time)
 claude mcp add software-factory -- npx software-factory mcp
 ```
 
-**Any MCP-compatible agent** — add to your agent config:
+Then in any Claude Code session:
+```
+Use software-factory MCP tools to implement this issue and deploy it:
+https://github.com/superplanehq/superplane/issues/5368
+
+Steps:
+1. factory_doctor — verify setup
+2. fetch_github_issue — read the issue
+3. get_repo_structure — understand the codebase
+4. [implement the changes using your own tools]
+5. push_branch — push your implementation
+6. deploy_preview — get a live Render URL
+7. create_pr — open PR + comment the preview URL on the issue
+```
+
+### Codex / OpenCode / Any MCP Agent
+
+Add to your agent's MCP config (`.mcp.json` or agent settings):
 ```json
 {
   "mcpServers": {
@@ -55,71 +117,106 @@ claude mcp add software-factory -- npx software-factory mcp
 }
 ```
 
-Then in your agent, tools are available instantly:
-
-| Tool | What it does |
-|------|-------------|
-| `build_issue` | Trigger the full pipeline for any GitHub issue URL |
-| `get_status` | Live stage-by-stage progress + preview URL when ready |
-| `list_runs` | Recent pipeline runs |
-| `get_logs` | Per-stage execution output |
-| `doctor` | Check configuration health |
-
-**Example agent prompt:**
+Then ask your agent:
 ```
-Use the software-factory MCP tools to implement:
+Use the software-factory tools to build and deploy a PoC for:
 https://github.com/superplanehq/superplane/issues/5368
-
-1. Call build_issue with that URL
-2. Call get_status every 30 seconds until the run completes
-3. Report the preview URL and PR link when done
 ```
 
 ---
 
-## How It Works
+## MCP Tools Reference
 
-```
-you:  npx software-factory build https://github.com/org/repo/issues/42
+| Tool | Description |
+|------|-------------|
+| `factory_doctor` | Check setup: SuperPlane, GitHub, Render all connected |
+| `fetch_github_issue` | Read issue title, body, labels, comments |
+| `get_repo_structure` | List files in a GitHub repo (any path, any branch) |
+| `read_repo_file` | Read a specific file from GitHub |
+| `push_branch` | Push code files to a new GitHub branch |
+| `deploy_preview` | Deploy branch to Render → returns live HTTPS URL |
+| `get_deploy_status` | Poll a Render deployment for live status |
+| `create_pr` | Open PR + comment preview URL on the original issue |
+| `get_pipeline_status` | Check SuperPlane canvas run history |
+| `trigger_autonomous_pipeline` | Run the full autonomous pipeline (no agent needed) |
 
-      ╔══════════════════ SuperPlane Canvas ══════════════════╗
-      ║  [1] Fetch Issue       reads title, body, labels      ║
-      ║  [2] Requirement Agent writes a precise spec.md       ║
-      ║  [3] Implementation    clones repo, writes code       ║
-      ║  [4] Validation        npm install → lint → test      ║
-      ║  [5] Deploy to Render  preview environment live       ║
-      ║  [6] PR Agent          PR opened + issue commented    ║
-      ╚════════════════════════════════════════════════════════╝
+---
 
-      ~8 hours later:
-      PR:      "feat: implement issue #42 [Software Factory]"
-      Preview: https://your-service.onrender.com ✅
+## Agent Workflow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Agent as AI Agent<br/>(Claude Code / Codex)
+    participant MCP as Software Factory<br/>(MCP Tools)
+    participant SP as SuperPlane
+    participant GH as GitHub
+    participant RE as Render
+
+    User->>Agent: "Implement issue #5368 and deploy"
+
+    Agent->>MCP: fetch_github_issue(issue_url)
+    MCP->>GH: GET /repos/superplanehq/superplane/issues/5368
+    GH-->>Agent: Issue title, body, labels
+
+    Agent->>MCP: get_repo_structure(repo, path)
+    MCP->>GH: GET /repos/.../contents/
+    GH-->>Agent: File tree
+
+    Note over Agent: Agent reads relevant files,<br/>writes the implementation
+
+    Agent->>MCP: push_branch(repo, branch, files)
+    MCP->>GH: Create commit + branch
+    GH-->>Agent: Branch URL
+
+    Agent->>MCP: deploy_preview(repo, branch)
+    MCP->>RE: Create/update service, trigger deploy
+    RE-->>Agent: 🚀 https://xxx.onrender.com
+
+    Agent->>MCP: create_pr(repo, branch, preview_url)
+    MCP->>GH: POST /pulls + POST /issues/5368/comments
+    GH-->>Agent: PR URL
+
+    Agent->>User: Preview: https://xxx.onrender.com<br/>PR: https://github.com/.../pull/999
 ```
 
 ---
 
-## Pipeline
+## CLI Commands
+
+```bash
+factory init [--yes]          # One-time setup
+factory doctor                # Check configuration
+factory build <url> [--follow] # Autonomous pipeline (no agent needed)
+factory status [--watch]       # Live pipeline status
+factory logs                   # Per-stage execution logs
+factory mcp                    # Start MCP server for AI agents
+```
+
+### `factory build --follow` (Autonomous Mode)
+
+If you want the pipeline to run fully automatically without an AI agent session:
+
+```bash
+factory build https://github.com/superplanehq/superplane/issues/5368 --follow
+```
+
+This triggers the SuperPlane canvas which autonomously: fetches the issue → generates spec → writes code → deploys → opens PR. Requires an Anthropic API key stored in secrets (set during `factory init`).
 
 ```mermaid
 flowchart LR
-    A([🚀 Start\nTrigger]) -->|issue_url\nrepo| B
-
-    B["📋 Fetch Issue\n─────────────\nGitHub REST API"]
+    A([🚀 Start]) -->|issue_url\nrepo| B
+    B["📋 Fetch Issue\nGitHub API"]
     B -->|passed| C
-
-    C["🧠 Requirement\nAgent\n─────────────\nGenerates spec.md"]
+    C["🧠 Requirement Agent\nGenerates spec"]
     C -->|passed| D
-
-    D["⚙️ Implementation\nAgent\n─────────────\nWrites code\ngit push branch"]
+    D["⚙️ Implementation\nWrites + pushes code"]
     D -->|passed| E
-
-    E["✅ Validation\nAgent\n─────────────\nnpm install\nlint · build · test"]
+    E["✅ Validation\nnpm test / build"]
     E -->|passed| F
-
-    F["🚢 Deploy to\nRender\n─────────────\nPreview env live"]
+    F["🚢 Deploy\nRender preview"]
     F -->|passed| G
-
-    G["🔀 PR Agent\n─────────────\nOpen PR\nComment issue"]
+    G["🔀 PR Agent\nPR + issue comment"]
 
     style A fill:#7fe2b4,stroke:#333,color:#000
     style G fill:#46E3B7,stroke:#333,color:#000
@@ -131,183 +228,52 @@ flowchart LR
 
 ```mermaid
 graph TB
-    subgraph cli["🖥️  CLI  (npx software-factory)"]
-        direction LR
-        init["factory init\n──────────\nStores API keys\nas SP secrets\nCreates canvas"]
-        build["factory build\n──────────\nParses issue URL\nTriggers canvas"]
-        status["factory status\n──────────\nLive run state\n--watch mode"]
-        logs["factory logs\n──────────\nPer-stage output"]
+    subgraph agents["👤 AI Agents (already on your machine)"]
+        cc["Claude Code"]
+        cx["Codex"]
+        oc["OpenCode"]
+        any["Any MCP agent"]
     end
 
-    subgraph sp["⚡  SuperPlane Canvas  (orchestration · state · retries)"]
-        direction LR
-        t([start])
-        fi[fetch-issue]
-        ra[requirement-agent]
-        ia[implementation-agent]
-        va[validation-agent]
-        rd[render-deploy]
-        pa[pr-agent]
-
-        t -->|default| fi
-        fi -->|passed| ra
-        ra -->|passed| ia
-        ia -->|passed| va
-        va -->|passed| rd
-        rd -->|passed| pa
+    subgraph factory["🏭 Software Factory (npm package)"]
+        mcp["MCP Server\nfactory mcp"]
+        cli["CLI\nfactory build"]
     end
 
-    subgraph ext["☁️  External Services"]
-        GH["GitHub API"]
-        AN["Anthropic API"]
-        RE["Render API"]
+    subgraph infra["☁️ Infrastructure"]
+        sp["SuperPlane\norchestration + state"]
+        gh["GitHub API\nfetch · push · PR"]
+        re["Render API\ndeploy · preview URL"]
     end
 
-    build -->|"POST /hooks/run"| t
-    status & logs -->|"GET /runs"| sp
+    cc & cx & oc & any -->|"MCP tools"| mcp
+    cli -->|"trigger_autonomous"| sp
+    mcp --> gh
+    mcp --> re
+    mcp --> sp
+    sp --> gh
+    sp --> re
 
-    fi <--> GH
-    ra & ia <--> AN
-    rd <--> RE
-    pa --> GH
-
-    style cli fill:#1a1a2e,color:#fff,stroke:#7fe2b4
-    style sp  fill:#16213e,color:#fff,stroke:#46E3B7
-    style ext fill:#0f3460,color:#fff,stroke:#7fe2b4
+    style agents fill:#1a1a2e,color:#eee,stroke:#7fe2b4
+    style factory fill:#16213e,color:#eee,stroke:#46E3B7
+    style infra fill:#0f3460,color:#eee,stroke:#7fe2b4
 ```
 
 ---
 
-## CLI Commands
+## Demo Issues
+
+The factory was built to solve these 5 SuperPlane open source issues:
 
 ```bash
-npx software-factory init              # one-time setup wizard
-npx software-factory init --yes        # non-interactive (reads env vars)
-npx software-factory doctor            # verify all prerequisites
-npx software-factory build <url>       # trigger the pipeline
-npx software-factory status --watch    # live status updates
-npx software-factory logs              # per-stage execution output
-```
+# In your AI agent:
+# "Use software-factory MCP tools to implement and deploy:"
 
-### `init`
-
-Interactive wizard that:
-- Prompts for your API keys (or reads from env vars)
-- Stores them as **SuperPlane secrets** (encrypted, never written to disk unencrypted)
-- Creates the 7-node canvas on your SuperPlane account
-- Saves canvas ID to `~/.factory/config.json`
-
-### `init --yes` (non-interactive)
-
-Reads everything from environment variables — designed for scripted or agent-driven setup:
-
-```bash
-export SUPERPLANE_TOKEN="your-token"
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GITHUB_TOKEN="ghp_..."
-export RENDER_API_KEY="rnd_..."          # optional
-export RENDER_SERVICE_ID="srv-..."       # optional
-export FACTORY_TARGET_REPO="owner/repo" # defaults to superplanehq/superplane
-
-npx software-factory init --yes
-```
-
-### `doctor`
-
-```
-  ✔ SuperPlane API          Connected as software-factory
-  ✔ Factory Canvas          "software-factory" (f77c363f...)
-  ✔ GitHub Token            @your-username
-  ✔ Render API Key          Render API reachable
-  ✔ anthropic-api-key       stored
-  ✔ github-token            stored
-  ✔ render-api-key          stored
-```
-
-### `build <issue-url>`
-
-Accepts any of these formats:
-
-```bash
-factory build https://github.com/owner/repo/issues/42
-factory build owner/repo#42
-factory build https://github.com/owner/repo/issues/42 --repo owner/other-repo
-```
-
----
-
-## Using with AI Coding Agents
-
-Software Factory is designed to be invoked by AI coding agents. Once initialized, a single command kicks off the full overnight pipeline.
-
-### Claude Code
-
-Paste this into your Claude Code session to solve any SuperPlane issue:
-
-```
-Use software-factory to implement this issue:
-https://github.com/superplanehq/superplane/issues/5368
-
-Steps:
-1. Run `factory doctor` — if anything fails, run `factory init`
-2. Run `factory build https://github.com/superplanehq/superplane/issues/5368`
-3. Run `factory status` to confirm the pipeline started
-```
-
-### Codex / OpenCode / any agent
-
-```bash
-# One-line setup (if env vars are set):
-npx software-factory init --yes
-
-# Solve an issue:
-npx software-factory build https://github.com/superplanehq/superplane/issues/5368
-
-# Check progress:
-npx software-factory status
-```
-
-### State machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> configured : factory init
-    configured --> triggered : factory build
-    triggered --> running : SuperPlane picks up
-    running --> passed : all stages green
-    running --> failed : stage error
-    passed --> [*] : PR + preview URL posted to issue
-    failed --> [*] : halted, logs available via factory logs
-```
-
----
-
-## Setup Requirements
-
-| What | Where | Used by |
-|------|-------|---------|
-| **SuperPlane API token** | [app.superplane.com](https://app.superplane.com) → Profile → API Tokens | `factory init` |
-| **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) | Requirement Agent, Implementation Agent |
-| **GitHub PAT** | GitHub → Settings → Developer → PATs (`repo` scope) | Fetch Issue, Implementation, PR Agent |
-| **Render API key** | [dashboard.render.com](https://dashboard.render.com/u/settings) → API Keys | Deploy to Render |
-| **Render Service ID** | Render dashboard → your service | Deploy to Render |
-
----
-
-## Secrets Model
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant CLI as factory init
-    participant SP as SuperPlane Secrets
-    participant Runner as Canvas Runner Nodes
-
-    User->>CLI: Enter API keys
-    CLI->>SP: POST /api/v1/secrets (PROVIDER_LOCAL)
-    SP-->>CLI: secrets stored encrypted
-    CLI->>Runner: reference via {valueSource: "secret", secret: {name, key}}
-    Note over Runner: Keys injected at runtime<br/>never logged or written to disk
+factory build https://github.com/superplanehq/superplane/issues/5368 --follow   # Markdown + Mermaid
+factory build https://github.com/superplanehq/superplane/issues/5366 --follow   # Canvas version diff
+factory build https://github.com/superplanehq/superplane/issues/5164 --follow   # Send execution to chat
+factory build https://github.com/superplanehq/superplane/issues/5704 --follow   # Run inspection UX
+factory build https://github.com/superplanehq/superplane/issues/5705 --follow   # Canvas warnings
 ```
 
 ---
@@ -317,47 +283,32 @@ sequenceDiagram
 ```mermaid
 graph LR
     subgraph bin["bin/"]
-        fjs["factory.js\nCommander CLI\nentrypoint"]
+        fjs["factory.js\nCLI entrypoint"]
     end
-
     subgraph src["src/"]
+        subgraph mcp["mcp/"]
+            ms["server.js\n10 MCP tools\nfetch · push · deploy · PR"]
+        end
         subgraph commands["commands/"]
-            ci["init.js\nwizard + canvas setup\nenv var support"]
+            ci["init.js\nsetup wizard"]
             cd["doctor.js\nhealth checks"]
-            cb["build.js\ntrigger run"]
-            cs["status.js\nrun state"]
+            cb["build.js\nautonomous trigger + follow"]
+            cs["status.js\nlive status"]
             cl["logs.js\nexecution logs"]
         end
-
-        subgraph superplane["superplane/"]
-            client["client.js\nSuperPlane REST client"]
-            template["canvas-template.js\nbuildCanvasSpec()\n7-node pipeline"]
+        subgraph sp["superplane/"]
+            client["client.js\nREST client"]
+            tmpl["canvas-template.js\n7-node pipeline"]
         end
-
-        config["config.js\n~/.factory/config.json"]
+        cfg["config.js\n~/.factory/config.json"]
     end
 
-    fjs --> ci & cd & cb & cs & cl
-    ci & cd & cb & cs & cl --> client
-    ci --> template
-    ci & cb & cs & cl --> config
+    fjs --> ci & cd & cb & cs & cl & ms
+    ms --> client & cfg
+    ci --> tmpl & client & cfg
 
     style bin fill:#2d2d2d,color:#eee,stroke:#7fe2b4
     style src fill:#1a1a2e,color:#eee,stroke:#46E3B7
-```
-
----
-
-## Demo Issues
-
-The factory was designed to solve these five SuperPlane issues end-to-end:
-
-```bash
-factory build https://github.com/superplanehq/superplane/issues/5368   # Markdown view + Mermaid
-factory build https://github.com/superplanehq/superplane/issues/5366   # Canvas version diff
-factory build https://github.com/superplanehq/superplane/issues/5164   # Send execution to chat
-factory build https://github.com/superplanehq/superplane/issues/5704   # Run inspection UX
-factory build https://github.com/superplanehq/superplane/issues/5705   # Canvas warnings
 ```
 
 ---
@@ -370,8 +321,6 @@ cd superplane-render-nyc-hack
 npm install
 node bin/factory.js --help
 ```
-
-The pipeline definition lives in [`src/superplane/canvas-template.js`](src/superplane/canvas-template.js). To add a stage: add a node to the `nodes` array, wire it in `edges`, then re-run `factory init`.
 
 ---
 
@@ -393,6 +342,6 @@ MIT © [Roshan Sharma](https://github.com/hongchengw)
 
 <div align="center">
 
-Built with [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com) · Powered by [Anthropic](https://anthropic.com)
+Built with [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com)
 
 </div>

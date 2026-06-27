@@ -4,22 +4,19 @@ import { SuperPlaneClient } from '../superplane/client.js';
 import { buildCanvasSpec } from '../superplane/canvas-template.js';
 import { loadConfig, saveConfig } from '../config.js';
 
-// Parse any GitHub URL or owner/repo format into "owner/repo"
 function normalizeRepo(input) {
   if (!input) return '';
-  // https://github.com/owner/repo.git  or  git@github.com:owner/repo.git
   const httpsMatch = input.match(/github\.com[/:]([^/]+\/[^/.]+?)(?:\.git)?\/?$/);
   if (httpsMatch) return httpsMatch[1];
-  // owner/repo or owner/repo.git
   const shortMatch = input.match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+?)(?:\.git)?$/);
   if (shortMatch) return shortMatch[1];
   return input.replace(/\.git$/, '');
 }
 
-// Read from stdin, env var, or return default
 function ask(rl, question, defaultVal, envVar) {
   const envVal = envVar ? process.env[envVar] : undefined;
   if (envVal) return Promise.resolve(envVal);
+  if (!rl || rl._closed) return Promise.resolve(defaultVal || '');
   return new Promise(resolve => {
     const hint = defaultVal ? chalk.dim(` [${defaultVal}]`) : '';
     rl.question(`${question}${hint}: `, answer => resolve(answer.trim() || defaultVal || ''));
@@ -45,138 +42,131 @@ async function upsertSecret(client, name, value) {
 export async function runInit(options = {}) {
   const nonInteractive = options.yes || process.env.FACTORY_YES === '1';
   const rl = nonInteractive
-    ? { question: (q, cb) => cb(''), close: () => {} }
+    ? null
     : createInterface({ input: process.stdin, output: process.stdout });
 
   console.log(chalk.bold.cyan('\n🏭 Software Factory — Setup\n'));
+
   if (nonInteractive) {
-    console.log(chalk.dim('  Running in non-interactive mode (env vars / --yes flag)\n'));
+    console.log(chalk.dim('  Non-interactive mode: reading from environment variables\n'));
   } else {
-    console.log('This wizard configures the Software Factory pipeline on SuperPlane.\n');
+    console.log([
+      '  3 things needed: SuperPlane token · GitHub token · Render API key',
+      '  No Anthropic key required — your AI agent handles code generation.',
+      '',
+    ].join('\n'));
   }
 
   const existing = loadConfig();
 
   try {
-    // ── SuperPlane ──────────────────────────────────────────────────────────
-    console.log(chalk.bold('SuperPlane'));
-    const spKey = await ask(rl, 'SuperPlane API token',
+    // ── 1. SuperPlane ───────────────────────────────────────────────────────
+    console.log(chalk.bold('1. SuperPlane'));
+    const spKey = await ask(rl, '  API token (app.superplane.com → Profile → API Tokens)',
       existing.superplaneApiKey, 'SUPERPLANE_TOKEN');
     if (!spKey) {
-      console.error(chalk.red('SuperPlane API token is required. Set SUPERPLANE_TOKEN or enter it here.'));
+      console.error(chalk.red('SuperPlane API token is required.'));
+      rl?.close();
       process.exit(1);
     }
 
     const client = new SuperPlaneClient(spKey);
-    process.stdout.write('  Verifying SuperPlane connection...');
+    process.stdout.write('  Verifying… ');
     const me = await client.getMe();
-    const orgId = me.user?.organizationId;
-    console.log(chalk.green(` ✔ Connected as ${me.user?.name || me.user?.id}`));
+    console.log(chalk.green(`✔ Connected as ${me.user?.name || me.user?.id}`));
 
-    // ── API Keys ────────────────────────────────────────────────────────────
-    console.log(chalk.bold('\nAPI Keys (stored as SuperPlane secrets)'));
-    const anthropicKey = await ask(rl, 'Anthropic API key (for Claude)',
-      existing.anthropicKeyHint !== '***' ? existing.anthropicKeyHint : '', 'ANTHROPIC_API_KEY');
-    const githubToken = await ask(rl, 'GitHub personal access token (repo scope)',
+    // ── 2. GitHub ───────────────────────────────────────────────────────────
+    console.log(chalk.bold('\n2. GitHub'));
+    const githubToken = await ask(rl,
+      '  Personal access token (github.com → Settings → Developer → PATs, needs repo scope)',
       existing.githubToken || '', 'GITHUB_TOKEN');
-    const renderKey = await ask(rl, 'Render API key (optional, press Enter to skip)',
-      existing.renderKey || '', 'RENDER_API_KEY');
 
-    // ── Target Repo ─────────────────────────────────────────────────────────
-    console.log(chalk.bold('\nTarget Repository'));
-    const rawRepo = await ask(rl, 'GitHub repo to deploy (owner/repo or URL)',
+    if (githubToken) {
+      try {
+        const res = await fetch('https://api.github.com/user', {
+          headers: { Authorization: `Bearer ${githubToken}`, 'User-Agent': 'software-factory' },
+        });
+        if (res.ok) {
+          const user = await res.json();
+          console.log(chalk.green(`  ✔ Authenticated as @${user.login}`));
+        }
+      } catch {}
+    }
+
+    // ── 3. Render ───────────────────────────────────────────────────────────
+    console.log(chalk.bold('\n3. Render'));
+    console.log(chalk.dim('  Get your key: https://dashboard.render.com/u/settings → API Keys'));
+    const renderKey = await ask(rl, '  Render API key',
+      existing.renderKey || '', 'RENDER_API_KEY');
+    const renderServiceId = await ask(rl, '  Render service ID (optional — leave blank to auto-create per deployment)',
+      existing.renderServiceId || '', 'RENDER_SERVICE_ID');
+
+    // ── 4. Target Repo (optional) ───────────────────────────────────────────
+    console.log(chalk.bold('\n4. Default Target Repository'));
+    const rawRepo = await ask(rl,
+      '  GitHub repo to build for (owner/repo or URL)',
       existing.targetRepo || 'superplanehq/superplane', 'FACTORY_TARGET_REPO');
     const targetRepo = normalizeRepo(rawRepo);
-    if (rawRepo !== targetRepo) {
-      console.log(chalk.dim(`  Normalized to: ${targetRepo}`));
-    }
+    if (rawRepo !== targetRepo) console.log(chalk.dim(`  → normalized to: ${targetRepo}`));
 
-    // ── Render Service ──────────────────────────────────────────────────────
-    let renderServiceId = existing.renderServiceId || '';
-    if (renderKey) {
-      renderServiceId = await ask(rl, 'Render service ID (from dashboard, optional)',
-        existing.renderServiceId || '', 'RENDER_SERVICE_ID');
-    }
+    // ── 5. Anthropic key (optional — for autonomous mode only) ──────────────
+    console.log(chalk.bold('\n5. Anthropic API Key') + chalk.dim(' (optional)'));
+    console.log(chalk.dim('  Only needed for autonomous mode (factory build without an AI agent).'));
+    console.log(chalk.dim('  If you use Claude Code, Codex, or OpenCode — skip this.'));
+    const anthropicKey = await ask(rl,
+      '  Anthropic API key (press Enter to skip)',
+      '', 'ANTHROPIC_API_KEY');
 
-    // ── Native Integration IDs (optional) ───────────────────────────────────
-    const claudeIntId = await ask(rl, 'Claude integration ID (optional, leave blank)',
-      existing.claudeIntegrationId || '', 'SUPERPLANE_CLAUDE_INTEGRATION_ID');
-    const githubIntId = await ask(rl, 'GitHub integration ID (optional, leave blank)',
-      existing.githubIntegrationId || '', 'SUPERPLANE_GITHUB_INTEGRATION_ID');
-    const renderIntId = renderServiceId
-      ? await ask(rl, 'Render integration ID (optional)', existing.renderIntegrationId || '', '')
-      : '';
-
-    // ── Canvas Name ─────────────────────────────────────────────────────────
-    const canvasName = await ask(rl, '\nCanvas name',
-      existing.canvasName || 'software-factory', 'FACTORY_CANVAS_NAME');
-
-    // ── Create Secrets ──────────────────────────────────────────────────────
-    console.log(chalk.bold('\nStoring secrets in SuperPlane...'));
-    await upsertSecret(client, 'anthropic-api-key', anthropicKey);
-    await upsertSecret(client, 'github-token', githubToken);
+    // ── Store secrets in SuperPlane ─────────────────────────────────────────
+    console.log(chalk.bold('\nStoring in SuperPlane…'));
+    if (githubToken) await upsertSecret(client, 'github-token', githubToken);
     if (renderKey) await upsertSecret(client, 'render-api-key', renderKey);
+    if (anthropicKey) await upsertSecret(client, 'anthropic-api-key', anthropicKey);
 
-    // ── Create or reuse Canvas ──────────────────────────────────────────────
+    // ── Canvas ──────────────────────────────────────────────────────────────
     let canvasId = existing.canvasId;
-
-    if (canvasId && !nonInteractive) {
-      const ans = await ask(rl, `\nCanvas "${canvasName}" already exists (${canvasId.slice(0, 8)}...). Recreate? [y/N]`, 'n', '');
-      if (ans.toLowerCase() === 'y') canvasId = null;
-    }
-
     if (!canvasId) {
-      console.log(chalk.bold('\nCreating Software Factory canvas on SuperPlane...'));
+      console.log(chalk.bold('\nCreating SuperPlane canvas…'));
       const spec = buildCanvasSpec({
-        claudeIntegrationId: claudeIntId || undefined,
-        githubIntegrationId: githubIntId || undefined,
-        renderIntegrationId: renderIntId || undefined,
-        renderServiceId: renderServiceId || undefined,
         targetRepo,
-        anthropicApiKeySecret: 'anthropic-api-key',
         githubTokenSecret: 'github-token',
         renderApiKeySecret: 'render-api-key',
+        anthropicApiKeySecret: 'anthropic-api-key',
+        renderServiceId: renderServiceId || undefined,
       });
-
-      const { canvas } = await client.createCanvas(canvasName, spec);
+      const { canvas } = await client.createCanvas('software-factory', spec);
       canvasId = canvas.metadata.id;
-      console.log(chalk.green(`  ✔ Canvas created: ${chalk.bold(canvasName)} (${canvasId})`));
-      console.log(chalk.dim(`    View: https://app.superplane.com/canvases/${canvasId}`));
+      console.log(chalk.green(`  ✔ Canvas created (${canvasId})`));
+      console.log(chalk.dim(`    https://app.superplane.com/canvases/${canvasId}`));
     } else {
-      console.log(chalk.dim(`\n  Using existing canvas: ${canvasId.slice(0, 8)}...`));
+      console.log(chalk.dim(`\n  Using existing canvas: ${canvasId.slice(0, 8)}…`));
     }
 
-    // ── Save Config ─────────────────────────────────────────────────────────
-    const config = {
+    // ── Save ────────────────────────────────────────────────────────────────
+    saveConfig({
       superplaneApiKey: spKey,
-      orgId,
       canvasId,
-      canvasName,
+      canvasName: 'software-factory',
       canvasTriggerNodeId: 'start',
+      canvasTemplateName: 'Build Issue',
       targetRepo,
-      renderServiceId: renderServiceId || undefined,
-      claudeIntegrationId: claudeIntId || undefined,
-      githubIntegrationId: githubIntId || undefined,
-      renderIntegrationId: renderIntId || undefined,
-      // Store tokens locally for doctor checks
-      githubToken: githubToken || undefined,
-      renderKey: renderKey || undefined,
-      anthropicKeyHint: anthropicKey ? '***' : undefined,
-    };
+      githubToken: githubToken || existing.githubToken,
+      renderKey: renderKey || existing.renderKey,
+      renderServiceId: renderServiceId || existing.renderServiceId,
+    });
 
-    saveConfig(config);
     console.log(chalk.green('\n✔ Configuration saved to ~/.factory/config.json'));
-
     console.log(chalk.bold.cyan('\n🏭 Software Factory is ready!\n'));
-    console.log('Next steps:');
-    console.log(`  ${chalk.cyan('factory doctor')}              Verify everything is configured`);
-    console.log(`  ${chalk.cyan('factory build <issue-url>')}   Trigger the pipeline`);
-    console.log(`  ${chalk.cyan('factory status')}              Watch pipeline progress`);
-    console.log();
-    console.log(chalk.dim(`Canvas: https://app.superplane.com/canvases/${canvasId}`));
-    console.log();
+
+    console.log(chalk.bold('Workflow options:\n'));
+    console.log(chalk.bold('  A) With your AI agent (recommended):'));
+    console.log(`     ${chalk.cyan('claude mcp add software-factory -- npx software-factory mcp')}`);
+    console.log(`     Then tell your agent: "Implement ${chalk.dim('<github-issue-url>')} and deploy to Render"\n`);
+    console.log(chalk.bold('  B) Autonomous pipeline (no agent needed):'));
+    console.log(`     ${chalk.cyan('factory build <github-issue-url> --follow')}\n`);
+    console.log(chalk.dim(`Canvas: https://app.superplane.com/canvases/${canvasId}\n`));
 
   } finally {
-    rl.close();
+    rl?.close();
   }
 }

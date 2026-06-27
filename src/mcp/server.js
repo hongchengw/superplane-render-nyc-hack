@@ -1,105 +1,218 @@
 /**
  * Software Factory MCP Server
  *
- * Exposes factory commands as MCP tools so any AI coding agent
- * (Claude Code, Codex, OpenCode, etc.) can trigger and monitor pipelines.
+ * The AI agent (Claude Code, Codex, OpenCode) is already the intelligence.
+ * This server provides infrastructure tools: GitHub, Render, SuperPlane.
  *
- * Usage: factory mcp  (registered as an MCP server in agent config)
+ * The agent:
+ *   1. Calls fetch_github_issue → reads + understands the issue
+ *   2. Calls get_repo_structure / read_repo_file → understands the codebase
+ *   3. Writes the implementation itself (using its own AI)
+ *   4. Calls push_branch → pushes code to GitHub
+ *   5. Calls deploy_preview → deploys to Render, returns live URL
+ *   6. Calls create_pr → opens PR + comments on the issue
  *
- * Claude Code config (~/.claude/claude_desktop_config.json):
- * {
- *   "mcpServers": {
- *     "software-factory": {
- *       "command": "npx",
- *       "args": ["software-factory", "mcp"]
- *     }
- *   }
- * }
+ * Setup in Claude Code:
+ *   claude mcp add software-factory -- npx software-factory mcp
+ *
+ * Setup in claude_desktop_config.json / .mcp.json:
+ *   { "mcpServers": { "software-factory": { "command": "npx", "args": ["software-factory", "mcp"] } } }
  */
 
 import { createInterface } from 'readline';
-import { SuperPlaneClient } from '../superplane/client.js';
 import { loadConfig } from '../config.js';
+import { SuperPlaneClient } from '../superplane/client.js';
 
-// ── Protocol helpers ──────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-function send(obj) {
-  process.stdout.write(JSON.stringify(obj) + '\n');
+function send(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+function ok(id, result) { send({ jsonrpc: '2.0', id, result }); }
+function fail(id, code, message) { send({ jsonrpc: '2.0', id, error: { code, message } }); }
+
+function getConfig() {
+  const c = loadConfig();
+  return {
+    spToken:      c.superplaneApiKey  || process.env.SUPERPLANE_TOKEN,
+    githubToken:  c.githubToken       || process.env.GITHUB_TOKEN,
+    renderKey:    c.renderKey         || process.env.RENDER_API_KEY,
+    renderSvcId:  c.renderServiceId   || process.env.RENDER_SERVICE_ID,
+    canvasId:     c.canvasId,
+    targetRepo:   c.targetRepo,
+    ...c,
+  };
 }
 
-function ok(id, result) {
-  send({ jsonrpc: '2.0', id, result });
+async function ghRequest(method, path, body, token) {
+  const res = await fetch(`https://api.github.com${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'software-factory/0.1.4',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(`GitHub ${res.status}: ${data.message || JSON.stringify(data)}`);
+  return data;
 }
 
-function err(id, code, message) {
-  send({ jsonrpc: '2.0', id, error: { code, message } });
+async function renderRequest(method, path, body, key) {
+  const res = await fetch(`https://api.render.com/v1${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { message: text }; }
+  if (!res.ok) throw new Error(`Render ${res.status}: ${data.message || text.slice(0, 200)}`);
+  return data;
+}
+
+function fmtMs(ms) {
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
   {
-    name: 'build_issue',
-    description:
-      'Trigger the Software Factory pipeline for a GitHub issue. ' +
-      'The pipeline autonomously: fetches the issue, generates a spec with Claude, ' +
-      'writes code, runs tests, deploys to Render, and opens a PR with the preview URL.',
+    name: 'fetch_github_issue',
+    description: 'Fetch a GitHub issue (title, body, labels, state, comments). Use this first to understand what to build.',
     inputSchema: {
       type: 'object',
       properties: {
-        issue_url: {
-          type: 'string',
-          description: 'GitHub issue URL (e.g. https://github.com/owner/repo/issues/42) or short form owner/repo#42',
-        },
-        repo: {
-          type: 'string',
-          description: 'Override target repository (owner/repo). Defaults to the configured target repo.',
-        },
+        issue_url: { type: 'string', description: 'GitHub issue URL (https://github.com/owner/repo/issues/42) or short form owner/repo#42' },
       },
       required: ['issue_url'],
     },
   },
   {
-    name: 'get_status',
-    description:
-      'Get the current pipeline run status. Returns the state of each stage, ' +
-      'elapsed time, and the preview URL + PR URL when the run completes.',
+    name: 'get_repo_structure',
+    description: 'List files and directories in a GitHub repo (optionally at a specific path and branch). Use to understand the codebase before implementing.',
     inputSchema: {
       type: 'object',
       properties: {
-        run_index: {
-          type: 'number',
-          description: 'Index of the run to inspect (0 = latest). Default: 0.',
-        },
+        repo: { type: 'string', description: 'owner/repo' },
+        path: { type: 'string', description: 'Directory path (default: root "")' },
+        branch: { type: 'string', description: 'Branch name (default: default branch)' },
       },
+      required: ['repo'],
     },
   },
   {
-    name: 'list_runs',
-    description: 'List recent pipeline runs with their state and result.',
+    name: 'read_repo_file',
+    description: 'Read the content of a specific file in a GitHub repo.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'owner/repo' },
+        path: { type: 'string', description: 'File path (e.g. src/components/Canvas.tsx)' },
+        branch: { type: 'string', description: 'Branch name (default: default branch)' },
+      },
+      required: ['repo', 'path'],
+    },
+  },
+  {
+    name: 'push_branch',
+    description: 'Push one or more files to a new GitHub branch. Use after implementing the solution to push it to GitHub.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'owner/repo (e.g. superplanehq/superplane)' },
+        branch: { type: 'string', description: 'New branch name (e.g. factory/issue-5368)' },
+        base_branch: { type: 'string', description: 'Base branch to branch from (default: main)' },
+        files: {
+          type: 'array',
+          description: 'Files to push',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'File path in the repo' },
+              content: { type: 'string', description: 'Full file content' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+        commit_message: { type: 'string', description: 'Commit message' },
+      },
+      required: ['repo', 'branch', 'files', 'commit_message'],
+    },
+  },
+  {
+    name: 'deploy_preview',
+    description: 'Deploy a GitHub branch to Render and return the live preview URL. Waits for the deployment to finish (up to 10 minutes). Returns the URL immediately when live.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'owner/repo' },
+        branch: { type: 'string', description: 'Branch to deploy' },
+        service_name: { type: 'string', description: 'Render service name (auto-generated if omitted)' },
+        build_command: { type: 'string', description: 'Build command (default: npm install)' },
+        start_command: { type: 'string', description: 'Start command (default: npm start)' },
+      },
+      required: ['repo', 'branch'],
+    },
+  },
+  {
+    name: 'get_deploy_status',
+    description: 'Check the status of a Render deployment. Returns status and URL when live.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        service_id: { type: 'string', description: 'Render service ID' },
+        deploy_id: { type: 'string', description: 'Render deploy ID' },
+      },
+      required: ['service_id'],
+    },
+  },
+  {
+    name: 'create_pr',
+    description: 'Create a GitHub pull request and post a comment on the original issue with the preview URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: 'owner/repo' },
+        branch: { type: 'string', description: 'Head branch with the implementation' },
+        base: { type: 'string', description: 'Base branch (default: main)' },
+        title: { type: 'string', description: 'PR title' },
+        body: { type: 'string', description: 'PR description (markdown)' },
+        issue_url: { type: 'string', description: 'Original issue URL to comment on with the preview link' },
+        preview_url: { type: 'string', description: 'Render preview URL to include in the PR and issue comment' },
+      },
+      required: ['repo', 'branch', 'title'],
+    },
+  },
+  {
+    name: 'get_pipeline_status',
+    description: 'Get the current Software Factory pipeline run status (SuperPlane canvas runs).',
     inputSchema: {
       type: 'object',
       properties: {},
     },
   },
   {
-    name: 'get_logs',
-    description: 'Get the execution log output for a specific pipeline stage.',
+    name: 'trigger_autonomous_pipeline',
+    description: 'Trigger the fully autonomous Software Factory pipeline in SuperPlane (no agent code-writing needed — the pipeline uses AI to implement the issue end-to-end). Takes 15–25 minutes.',
     inputSchema: {
       type: 'object',
       properties: {
-        stage: {
-          type: 'string',
-          description: 'Stage name: fetch-issue | requirement-agent | implementation-agent | validation-agent | render-deploy | pr-agent',
-          enum: ['fetch-issue', 'requirement-agent', 'implementation-agent', 'validation-agent', 'render-deploy', 'pr-agent'],
-        },
+        issue_url: { type: 'string', description: 'GitHub issue URL' },
+        repo: { type: 'string', description: 'Target repo (owner/repo)' },
       },
-      required: ['stage'],
+      required: ['issue_url'],
     },
   },
   {
-    name: 'doctor',
-    description: 'Check that the Software Factory is correctly configured (API keys, canvas, secrets).',
+    name: 'factory_doctor',
+    description: 'Check that the Software Factory is correctly configured. Run this first to verify everything is set up.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -107,274 +220,485 @@ const TOOLS = [
   },
 ];
 
-// ── Tool implementations ──────────────────────────────────────────────────────
-
-function getClient() {
-  const config = loadConfig();
-  const token = config.superplaneApiKey || process.env.SUPERPLANE_TOKEN;
-  if (!token) throw new Error('Not configured. Run: factory init');
-  return { client: new SuperPlaneClient(token), config };
-}
+// ── Implementations ──────────────────────────────────────────────────────────
 
 function parseIssueUrl(input) {
   const urlMatch = input.match(/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/);
-  if (urlMatch) return { repo: urlMatch[1], issueNumber: parseInt(urlMatch[2]), url: input };
+  if (urlMatch) return { repo: urlMatch[1], number: parseInt(urlMatch[2]), url: input };
   const shortMatch = input.match(/^([^/]+\/[^/]+)#(\d+)$/);
   if (shortMatch) return {
     repo: shortMatch[1],
-    issueNumber: parseInt(shortMatch[2]),
+    number: parseInt(shortMatch[2]),
     url: `https://github.com/${shortMatch[1]}/issues/${shortMatch[2]}`,
   };
-  return null;
+  throw new Error(`Invalid issue URL: ${input}. Expected https://github.com/owner/repo/issues/N or owner/repo#N`);
 }
 
-function fmtDuration(ms) {
-  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
-  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
-}
+async function impl_fetchIssue({ issue_url }) {
+  const { githubToken } = getConfig();
+  if (!githubToken) throw new Error('GitHub token not configured. Run: factory init or set GITHUB_TOKEN');
 
-const STAGE_ORDER = [
-  'start', 'fetch-issue', 'requirement-agent', 'implementation-agent',
-  'validation-agent', 'render-deploy', 'pr-agent', 'create-pr', 'pr-comment',
-];
+  const { repo, number, url } = parseIssueUrl(issue_url);
+  const issue = await ghRequest('GET', `/repos/${repo}/issues/${number}`, null, githubToken);
 
-async function toolBuildIssue({ issue_url, repo }) {
-  const { client, config } = getClient();
-  if (!config.canvasId) throw new Error('No canvas configured. Run: factory init');
-
-  const parsed = parseIssueUrl(issue_url);
-  if (!parsed) throw new Error(`Invalid issue URL: ${issue_url}`);
-
-  const targetRepo = repo || config.targetRepo || parsed.repo;
-
-  const result = await client.triggerCanvas(
-    config.canvasId,
-    config.canvasTriggerNodeId || 'start',
-    { issue_url: parsed.url, repo: targetRepo },
-    config.canvasTemplateName || 'Build Issue',
-  );
-
-  const eventId = result.result?.event_id;
+  // Also fetch first 5 comments
+  let comments = [];
+  try {
+    const rawComments = await ghRequest('GET', `/repos/${repo}/issues/${number}/comments?per_page=5`, null, githubToken);
+    comments = rawComments.map(c => `@${c.user.login}: ${c.body}`);
+  } catch {}
 
   return [
-    `✅ Pipeline triggered for issue #${parsed.issueNumber}`,
+    `Issue #${number}: ${issue.title}`,
+    `URL: ${url}`,
+    `Repo: ${repo}`,
+    `State: ${issue.state}`,
+    `Labels: ${issue.labels.map(l => l.name).join(', ') || 'none'}`,
+    `Author: @${issue.user.login}`,
     ``,
-    `Issue:   ${parsed.url}`,
-    `Repo:    ${targetRepo}`,
-    `Canvas:  ${config.canvasId}`,
-    eventId ? `Event:   ${eventId}` : '',
+    `## Description`,
+    issue.body || '(no description)',
+    comments.length ? `\n## Comments\n${comments.join('\n\n')}` : '',
     ``,
-    `The pipeline is now running through 6 stages in SuperPlane:`,
-    `  1. Fetch Issue           → reads GitHub issue details`,
-    `  2. Requirement Agent     → Claude writes an implementation spec`,
-    `  3. Implementation Agent  → Claude writes code, pushes branch`,
-    `  4. Validation Agent      → runs npm test / build / lint`,
-    `  5. Deploy to Render      → deploys preview environment`,
-    `  6. PR Agent              → opens PR + comments preview URL on issue`,
-    ``,
-    `Monitor with: get_status tool  |  factory status --watch`,
-    `Canvas URL: https://app.superplane.com/canvases/${config.canvasId}`,
-  ].filter(l => l !== null).join('\n');
+    `Next: Use get_repo_structure to understand the codebase, then implement the changes.`,
+  ].join('\n');
 }
 
-async function toolGetStatus({ run_index = 0 } = {}) {
-  const { client, config } = getClient();
-  if (!config.canvasId) throw new Error('No canvas configured. Run: factory init');
+async function impl_getRepoStructure({ repo, path = '', branch }) {
+  const { githubToken } = getConfig();
+  if (!githubToken) throw new Error('GitHub token not configured. Run: factory init or set GITHUB_TOKEN');
 
-  const { runs } = await client.listRuns(config.canvasId);
-  if (!runs?.length) return 'No runs yet. Use build_issue to start the pipeline.';
+  const ref = branch ? `?ref=${branch}` : '';
+  const data = await ghRequest('GET', `/repos/${repo}/contents/${path}${ref}`, null, githubToken);
 
-  const run = runs[run_index] || runs[0];
-  const execs = run.executions || [];
-  const byNode = {};
-  for (const ex of execs) byNode[ex.nodeId] = ex;
+  const items = Array.isArray(data) ? data : [data];
+  const lines = [`${repo}/${path || ''} (${branch || 'default branch'})`, ''];
 
-  const lines = [
-    `Run ID:  ${run.id}`,
-    `State:   ${run.state}`,
-    `Result:  ${run.result || 'in progress'}`,
-    `Started: ${new Date(run.createdAt).toLocaleString()}`,
-    run.finishedAt ? `Done:    ${new Date(run.finishedAt).toLocaleString()} (${fmtDuration(new Date(run.finishedAt) - new Date(run.createdAt))})` : '',
-    '',
-    'Stages:',
-  ];
-
-  for (const nodeId of STAGE_ORDER) {
-    const ex = byNode[nodeId];
-    if (!ex) continue;
-    const label = nodeId.padEnd(26);
-    let status = ex.state === 'STATE_FINISHED'
-      ? (ex.result === 'RESULT_PASSED' ? '✅ passed' : `❌ ${ex.result}`)
-      : '⟳ running';
-    const dur = ex.createdAt && ex.updatedAt
-      ? ` (${fmtDuration(new Date(ex.updatedAt) - new Date(ex.createdAt))})`
-      : '';
-    lines.push(`  ${label} ${status}${dur}`);
-    if (ex.result === 'RESULT_FAILED' && ex.resultMessage) {
-      lines.push(`    ↳ ${ex.resultMessage}`);
-    }
+  for (const item of items) {
+    const icon = item.type === 'dir' ? '📁' : '📄';
+    lines.push(`${icon} ${item.name}${item.type === 'dir' ? '/' : ''} (${item.size || 0} bytes)`);
   }
 
-  // Extract URLs
-  const renderEx = byNode['render-deploy'];
-  const prEx = byNode['pr-agent'] || byNode['create-pr'];
-  if (renderEx?.resultData?.preview_url) {
-    lines.push('', `🚀 Preview URL: ${renderEx.resultData.preview_url}`);
-  }
-  if (prEx?.resultData?.pr_url || prEx?.resultData?.html_url) {
-    lines.push(`🔀 PR URL:      ${prEx.resultData?.pr_url || prEx.resultData?.html_url}`);
-  }
+  lines.push('', `Total: ${items.length} items`);
+  lines.push(`\nTo read a file: read_repo_file(repo="${repo}", path="${path ? path + '/' : ''}filename")`);
 
-  lines.push('', `Canvas: https://app.superplane.com/canvases/${config.canvasId}`);
-
-  return lines.filter(l => l !== null).join('\n');
-}
-
-async function toolListRuns() {
-  const { client, config } = getClient();
-  if (!config.canvasId) throw new Error('No canvas configured. Run: factory init');
-
-  const { runs, totalCount } = await client.listRuns(config.canvasId);
-  if (!runs?.length) return 'No runs yet. Use build_issue to start the pipeline.';
-
-  const lines = [`${totalCount || runs.length} run(s) on canvas ${config.canvasId}`, ''];
-  for (const [i, run] of runs.entries()) {
-    const dur = run.finishedAt
-      ? ` · ${fmtDuration(new Date(run.finishedAt) - new Date(run.createdAt))}`
-      : '';
-    lines.push(`[${i}] ${run.id.slice(0, 8)}... ${run.state} ${run.result || ''}${dur}`);
-    lines.push(`     ${new Date(run.createdAt).toLocaleString()}`);
-  }
   return lines.join('\n');
 }
 
-async function toolGetLogs({ stage }) {
-  const { client, config } = getClient();
-  if (!config.canvasId) throw new Error('No canvas configured. Run: factory init');
+async function impl_readFile({ repo, path, branch }) {
+  const { githubToken } = getConfig();
+  if (!githubToken) throw new Error('GitHub token not configured. Run: factory init or set GITHUB_TOKEN');
 
-  const { executions } = await client.listNodeExecutions(config.canvasId, stage);
-  if (!executions?.length) return `No executions found for stage: ${stage}`;
+  const ref = branch ? `?ref=${branch}` : '';
+  const data = await ghRequest('GET', `/repos/${repo}/contents/${path}${ref}`, null, githubToken);
 
-  const latest = executions[0];
-  const lines = [
-    `Stage: ${stage}`,
-    `State: ${latest.state}  Result: ${latest.result}`,
-    latest.resultMessage ? `Message: ${latest.resultMessage}` : '',
-    '',
-    'Output:',
-    latest.output || latest.logs || '(no output captured)',
-  ];
-  return lines.filter(l => l !== null).join('\n');
+  if (data.encoding === 'base64') {
+    const content = Buffer.from(data.content, 'base64').toString('utf8');
+    return `File: ${repo}/${path}\nSize: ${data.size} bytes\nSHA: ${data.sha}\n\n${content}`;
+  }
+  return data.content || '(binary file)';
 }
 
-async function toolDoctor() {
-  const config = loadConfig();
-  const token = config.superplaneApiKey || process.env.SUPERPLANE_TOKEN;
+async function impl_pushBranch({ repo, branch, base_branch = 'main', files, commit_message }) {
+  const { githubToken } = getConfig();
+  if (!githubToken) throw new Error('GitHub token not configured. Run: factory init or set GITHUB_TOKEN');
+  if (!files?.length) throw new Error('files array is required and must not be empty');
+
+  // Get base branch SHA
+  const baseRef = await ghRequest('GET', `/repos/${repo}/git/ref/heads/${base_branch}`, null, githubToken);
+  const baseSha = baseRef.object.sha;
+
+  // Get base tree SHA
+  const baseCommit = await ghRequest('GET', `/repos/${repo}/git/commits/${baseSha}`, null, githubToken);
+  const baseTreeSha = baseCommit.tree.sha;
+
+  // Create blobs for each file
+  const treeItems = await Promise.all(files.map(async (f) => {
+    const blob = await ghRequest('POST', `/repos/${repo}/git/blobs`, {
+      content: f.content,
+      encoding: 'utf-8',
+    }, githubToken);
+    return { path: f.path, mode: '100644', type: 'blob', sha: blob.sha };
+  }));
+
+  // Create new tree
+  const newTree = await ghRequest('POST', `/repos/${repo}/git/trees`, {
+    base_tree: baseTreeSha,
+    tree: treeItems,
+  }, githubToken);
+
+  // Create commit
+  const newCommit = await ghRequest('POST', `/repos/${repo}/git/commits`, {
+    message: commit_message,
+    tree: newTree.sha,
+    parents: [baseSha],
+  }, githubToken);
+
+  // Create branch
+  await ghRequest('POST', `/repos/${repo}/git/refs`, {
+    ref: `refs/heads/${branch}`,
+    sha: newCommit.sha,
+  }, githubToken);
+
+  return [
+    `✅ Branch pushed successfully`,
+    ``,
+    `Branch:  ${branch}`,
+    `Commit:  ${newCommit.sha.slice(0, 7)}`,
+    `Message: ${commit_message}`,
+    `Files:   ${files.map(f => f.path).join(', ')}`,
+    `URL:     https://github.com/${repo}/tree/${branch}`,
+    ``,
+    `Next: Call deploy_preview to get a live Render URL.`,
+  ].join('\n');
+}
+
+async function impl_deployPreview({ repo, branch, service_name, build_command = 'npm install', start_command = 'npm start' }) {
+  const { renderKey, renderSvcId } = getConfig();
+  if (!renderKey) throw new Error(
+    'Render API key not configured.\n' +
+    'Run: factory init  (and enter your Render API key)\n' +
+    'Or: export RENDER_API_KEY=rnd_xxx\n' +
+    'Get your key at: https://dashboard.render.com/u/settings → API Keys'
+  );
+
+  let serviceId = renderSvcId;
+  let serviceUrl;
+  const name = service_name || `factory-${branch.replace(/[^a-z0-9-]/gi, '-').toLowerCase().slice(0, 40)}`;
+
+  if (serviceId) {
+    // Update existing service to deploy this branch
+    const owners = await renderRequest('GET', '/owners?limit=1', null, renderKey);
+    const ownerId = owners?.[0]?.owner?.id;
+
+    await renderRequest('PATCH', `/services/${serviceId}`, {
+      branch,
+      autoDeploy: 'yes',
+    }, renderKey);
+
+    const svcInfo = await renderRequest('GET', `/services/${serviceId}`, null, renderKey);
+    serviceUrl = svcInfo.service?.serviceDetails?.url || svcInfo.serviceDetails?.url;
+  } else {
+    // Create new service
+    const owners = await renderRequest('GET', '/owners?limit=1', null, renderKey);
+    const ownerId = owners?.[0]?.owner?.id;
+    if (!ownerId) throw new Error('Could not get Render owner ID');
+
+    const svc = await renderRequest('POST', '/services', {
+      type: 'web_service',
+      name,
+      ownerId,
+      repo: `https://github.com/${repo}`,
+      branch,
+      autoDeploy: 'yes',
+      serviceDetails: {
+        env: 'node',
+        buildCommand: build_command,
+        startCommand: start_command,
+        plan: 'starter',
+        region: 'oregon',
+      },
+    }, renderKey);
+
+    serviceId = svc.service?.id || svc.id;
+    serviceUrl = svc.service?.serviceDetails?.url || svc.serviceDetails?.url;
+  }
+
+  if (!serviceId) throw new Error('Failed to get Render service ID');
+
+  // Trigger deploy
+  const deploy = await renderRequest('POST', `/services/${serviceId}/deploys`, {
+    clearCache: 'do_not_clear',
+  }, renderKey);
+  const deployId = deploy.deploy?.id || deploy.id;
+
+  const started = Date.now();
+  process.stderr.write(`[factory] Deploying to Render (service: ${serviceId})...\n`);
+
+  // Poll for completion (up to 12 minutes)
+  for (let i = 0; i < 72; i++) {
+    await new Promise(r => setTimeout(r, 10000));
+    try {
+      const status = await renderRequest('GET', `/services/${serviceId}/deploys/${deployId}`, null, renderKey);
+      const s = status.deploy?.status || status.status;
+      process.stderr.write(`[factory] Deploy status: ${s} (${fmtMs(Date.now() - started)})\n`);
+
+      if (s === 'live') {
+        const svcInfo = await renderRequest('GET', `/services/${serviceId}`, null, renderKey);
+        const url = svcInfo.service?.serviceDetails?.url || svcInfo.serviceDetails?.url || serviceUrl;
+        return [
+          `✅ Deployed to Render!`,
+          ``,
+          `Preview URL: ${url}`,
+          `Service ID:  ${serviceId}`,
+          `Deploy ID:   ${deployId}`,
+          `Time:        ${fmtMs(Date.now() - started)}`,
+          ``,
+          `Next: Call create_pr to open a pull request with this preview URL.`,
+        ].join('\n');
+      }
+      if (s === 'failed' || s === 'canceled') {
+        throw new Error(`Render deployment ${s} after ${fmtMs(Date.now() - started)}`);
+      }
+    } catch (e) {
+      if (e.message.includes('failed') || e.message.includes('canceled')) throw e;
+      // Network blip — keep polling
+    }
+  }
+
+  throw new Error(`Deployment timed out after 12 minutes. Check: https://dashboard.render.com`);
+}
+
+async function impl_getDeployStatus({ service_id, deploy_id }) {
+  const { renderKey } = getConfig();
+  if (!renderKey) throw new Error('Render API key not configured. Run: factory init or set RENDER_API_KEY');
+
+  const svc = await renderRequest('GET', `/services/${service_id}`, null, renderKey);
+  const url = svc.service?.serviceDetails?.url || svc.serviceDetails?.url;
+
+  if (deploy_id) {
+    const d = await renderRequest('GET', `/services/${service_id}/deploys/${deploy_id}`, null, renderKey);
+    const s = d.deploy?.status || d.status;
+    return `Deploy ${deploy_id}: ${s}\nService URL: ${url || 'pending'}`;
+  }
+
+  // Latest deploy
+  const deploys = await renderRequest('GET', `/services/${service_id}/deploys?limit=1`, null, renderKey);
+  const latest = deploys?.[0]?.deploy || deploys?.[0];
+  return [
+    `Service: ${service_id}`,
+    `URL:     ${url || 'pending'}`,
+    latest ? `Latest deploy: ${latest.id} — ${latest.status}` : 'No deploys yet',
+  ].join('\n');
+}
+
+async function impl_createPR({ repo, branch, base = 'main', title, body = '', issue_url, preview_url }) {
+  const { githubToken } = getConfig();
+  if (!githubToken) throw new Error('GitHub token not configured. Run: factory init or set GITHUB_TOKEN');
+
+  const prBody = [
+    body,
+    preview_url ? `\n**🚀 Preview:** ${preview_url}` : '',
+    issue_url ? `\n**Issue:** ${issue_url}` : '',
+    `\n---\n*Built with [Software Factory](https://www.npmjs.com/package/software-factory) · Orchestrated by [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com)*`,
+  ].filter(Boolean).join('\n');
+
+  const pr = await ghRequest('POST', `/repos/${repo}/pulls`, {
+    title,
+    head: branch,
+    base,
+    body: prBody,
+  }, githubToken);
+
+  const prUrl = pr.html_url;
+
+  // Comment on the original issue if provided
+  if (issue_url) {
+    try {
+      const { repo: issueRepo, number } = parseIssueUrl(issue_url);
+      const comment = [
+        `### 🏭 Software Factory built a PoC for this issue!`,
+        ``,
+        preview_url ? `**🚀 Live Preview:** ${preview_url}` : '',
+        `**🔀 Pull Request:** ${prUrl}`,
+        ``,
+        `| Stage | Status |`,
+        `|-------|--------|`,
+        `| Fetch Issue | ✅ Done |`,
+        `| Implementation | ✅ Done |`,
+        preview_url ? `| Deploy to Render | ✅ Live |` : `| Deploy | ⏳ Pending |`,
+        `| Pull Request | ✅ Open |`,
+        ``,
+        `*Built with [Software Factory](https://www.npmjs.com/package/software-factory)*`,
+      ].filter(Boolean).join('\n');
+
+      await ghRequest('POST', `/repos/${issueRepo}/issues/${number}/comments`, { body: comment }, githubToken);
+    } catch {}
+  }
+
+  return [
+    `✅ Pull Request created!`,
+    ``,
+    `PR URL:      ${prUrl}`,
+    `PR Number:   #${pr.number}`,
+    preview_url ? `Preview URL: ${preview_url}` : '',
+    ``,
+    `The PR is now open. A comment with the preview link has been posted to the original issue.`,
+  ].filter(Boolean).join('\n');
+}
+
+async function impl_pipelineStatus() {
+  const cfg = getConfig();
+  if (!cfg.spToken || !cfg.canvasId) return 'Not configured. Run: factory init';
+
+  const client = new SuperPlaneClient(cfg.spToken);
+  const { runs } = await client.listRuns(cfg.canvasId);
+  if (!runs?.length) return 'No pipeline runs yet. Use trigger_autonomous_pipeline or factory build.';
+
+  const STAGES = ['start','fetch-issue','requirement-agent','implementation-agent','validation-agent','render-deploy','pr-agent','create-pr','pr-comment'];
   const lines = [];
 
-  // SuperPlane
-  if (token) {
-    try {
-      const client = new SuperPlaneClient(token);
-      const me = await client.getMe();
-      lines.push(`✅ SuperPlane API     Connected as ${me.user?.name || me.user?.id}`);
+  for (const [i, run] of runs.slice(0, 3).entries()) {
+    const execs = run.executions || [];
+    const byNode = {};
+    for (const e of execs) byNode[e.nodeId] = e;
 
-      if (config.canvasId) {
-        try {
-          const { canvas } = await client.getCanvas(config.canvasId);
-          lines.push(`✅ Factory Canvas     "${canvas.metadata?.name}" (${config.canvasId.slice(0, 8)}...)`);
-        } catch {
-          lines.push(`❌ Factory Canvas     Not found — run: factory init`);
-        }
-      } else {
-        lines.push(`❌ Factory Canvas     Not configured — run: factory init`);
-      }
+    const dur = run.finishedAt
+      ? fmtMs(new Date(run.finishedAt) - new Date(run.createdAt))
+      : fmtMs(Date.now() - new Date(run.createdAt)) + ' (running)';
 
-      const exists_anthropic = await client.secretExists('anthropic-api-key');
-      const exists_github = await client.secretExists('github-token');
-      const exists_render = await client.secretExists('render-api-key');
-      lines.push(`${exists_anthropic ? '✅' : '❌'} Secret: anthropic-api-key`);
-      lines.push(`${exists_github ? '✅' : '❌'} Secret: github-token`);
-      lines.push(`${exists_render ? '✅' : '⚠️'} Secret: render-api-key (optional)`);
-    } catch (e) {
-      lines.push(`❌ SuperPlane API     ${e.message}`);
+    lines.push(`[${i}] Run ${run.id.slice(0,8)}…  ${run.state} / ${run.result || 'in-progress'}  (${dur})`);
+    for (const nodeId of STAGES) {
+      const ex = byNode[nodeId];
+      if (!ex) continue;
+      const icon = ex.result === 'RESULT_PASSED' ? '✅' : ex.result === 'RESULT_FAILED' ? '❌' : '⟳';
+      lines.push(`  ${icon} ${nodeId}`);
     }
-  } else {
-    lines.push(`❌ SuperPlane API     No token — run: factory init`);
+    if (i < 2) lines.push('');
   }
 
-  if (config.targetRepo) lines.push(``, `Target repo: ${config.targetRepo}`);
-  if (config.canvasId) lines.push(`Canvas URL:  https://app.superplane.com/canvases/${config.canvasId}`);
+  lines.push(`\nCanvas: https://app.superplane.com/canvases/${cfg.canvasId}`);
+  return lines.join('\n');
+}
 
-  const allGood = lines.every(l => !l.startsWith('❌'));
-  lines.push('', allGood
-    ? '✅ All checks passed. Ready to build: build_issue tool'
-    : '⚠️  Some checks failed. Run: factory init to reconfigure.');
+async function impl_triggerAutonomous({ issue_url, repo }) {
+  const cfg = getConfig();
+  if (!cfg.spToken || !cfg.canvasId) throw new Error('Not configured. Run: factory init');
+
+  const { repo: parsedRepo, number, url } = parseIssueUrl(issue_url);
+  const targetRepo = repo || cfg.targetRepo || parsedRepo;
+
+  const client = new SuperPlaneClient(cfg.spToken);
+  const result = await client.triggerCanvas(
+    cfg.canvasId,
+    cfg.canvasTriggerNodeId || 'start',
+    { issue_url: url, repo: targetRepo },
+    cfg.canvasTemplateName || 'Build Issue',
+  );
+
+  return [
+    `✅ Autonomous pipeline triggered!`,
+    ``,
+    `Issue: ${url}`,
+    `Repo:  ${targetRepo}`,
+    `Event: ${result.result?.event_id || 'pending'}`,
+    ``,
+    `The pipeline will autonomously implement and deploy this issue (15–25 min).`,
+    `Monitor with: get_pipeline_status tool`,
+    `Canvas: https://app.superplane.com/canvases/${cfg.canvasId}`,
+    ``,
+    `Note: Autonomous mode requires an Anthropic API key stored in SuperPlane secrets.`,
+    `For agent-first mode (faster, no Anthropic key): use fetch_github_issue → push_branch → deploy_preview → create_pr`,
+  ].join('\n');
+}
+
+async function impl_doctor() {
+  const cfg = getConfig();
+  const lines = ['Software Factory Configuration Check', ''];
+
+  // SuperPlane
+  if (cfg.spToken) {
+    try {
+      const client = new SuperPlaneClient(cfg.spToken);
+      const me = await client.getMe();
+      lines.push(`✅ SuperPlane API     Connected as ${me.user?.name || me.user?.id}`);
+      if (cfg.canvasId) {
+        try {
+          const { canvas } = await client.getCanvas(cfg.canvasId);
+          lines.push(`✅ Factory Canvas     "${canvas.metadata?.name}" (${cfg.canvasId.slice(0,8)}…)`);
+        } catch { lines.push(`❌ Factory Canvas     Not found — run: factory init`); }
+      } else {
+        lines.push(`❌ Factory Canvas     Not set — run: factory init`);
+      }
+    } catch (e) { lines.push(`❌ SuperPlane API     ${e.message}`); }
+  } else {
+    lines.push(`❌ SuperPlane API     No token — run: factory init or set SUPERPLANE_TOKEN`);
+  }
+
+  // GitHub
+  if (cfg.githubToken) {
+    try {
+      const user = await ghRequest('GET', '/user', null, cfg.githubToken);
+      lines.push(`✅ GitHub Token       @${user.login} (${user.name || ''})`);
+    } catch (e) { lines.push(`❌ GitHub Token       ${e.message}`); }
+  } else {
+    lines.push(`❌ GitHub Token       Not set — run: factory init or set GITHUB_TOKEN`);
+  }
+
+  // Render
+  if (cfg.renderKey) {
+    try {
+      await renderRequest('GET', '/owners?limit=1', null, cfg.renderKey);
+      lines.push(`✅ Render API Key     Connected`);
+    } catch (e) { lines.push(`❌ Render API Key     ${e.message}`); }
+  } else {
+    lines.push(`⚠️  Render API Key     Not set (required for deploy_preview)`);
+    lines.push(`     Get it: https://dashboard.render.com/u/settings → API Keys`);
+    lines.push(`     Then run: factory init`);
+  }
+
+  const allGood = !lines.some(l => l.startsWith('❌'));
+  lines.push('');
+  lines.push(allGood
+    ? '✅ All checks passed.\n\nAgent workflow: fetch_github_issue → implement → push_branch → deploy_preview → create_pr'
+    : '⚠️  Complete setup: factory init\n   Required: SuperPlane token, GitHub token, Render API key');
 
   return lines.join('\n');
 }
 
-// ── Request handler ──────────────────────────────────────────────────────────
+// ── Request router ────────────────────────────────────────────────────────────
 
-async function handleRequest(req) {
+async function handle(req) {
   const { id, method, params } = req;
 
   if (method === 'initialize') {
     return ok(id, {
       protocolVersion: '2024-11-05',
-      serverInfo: { name: 'software-factory', version: '0.1.3' },
+      serverInfo: { name: 'software-factory', version: '0.1.4' },
       capabilities: { tools: {} },
     });
   }
 
-  if (method === 'tools/list') {
-    return ok(id, { tools: TOOLS });
-  }
+  if (method === 'tools/list') return ok(id, { tools: TOOLS });
 
   if (method === 'tools/call') {
     const { name, arguments: args = {} } = params;
     try {
       let text;
       switch (name) {
-        case 'build_issue':    text = await toolBuildIssue(args); break;
-        case 'get_status':     text = await toolGetStatus(args); break;
-        case 'list_runs':      text = await toolListRuns(); break;
-        case 'get_logs':       text = await toolGetLogs(args); break;
-        case 'doctor':         text = await toolDoctor(); break;
-        default:
-          return err(id, -32601, `Unknown tool: ${name}`);
+        case 'fetch_github_issue':           text = await impl_fetchIssue(args); break;
+        case 'get_repo_structure':           text = await impl_getRepoStructure(args); break;
+        case 'read_repo_file':               text = await impl_readFile(args); break;
+        case 'push_branch':                  text = await impl_pushBranch(args); break;
+        case 'deploy_preview':               text = await impl_deployPreview(args); break;
+        case 'get_deploy_status':            text = await impl_getDeployStatus(args); break;
+        case 'create_pr':                    text = await impl_createPR(args); break;
+        case 'get_pipeline_status':          text = await impl_pipelineStatus(); break;
+        case 'trigger_autonomous_pipeline':  text = await impl_triggerAutonomous(args); break;
+        case 'factory_doctor':               text = await impl_doctor(); break;
+        default: return fail(id, -32601, `Unknown tool: ${name}`);
       }
       return ok(id, { content: [{ type: 'text', text }] });
     } catch (e) {
-      return ok(id, {
-        content: [{ type: 'text', text: `Error: ${e.message}` }],
-        isError: true,
-      });
+      return ok(id, { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true });
     }
   }
 
-  if (method === 'notifications/initialized') return; // no response needed
-
-  return err(id, -32601, `Method not found: ${method}`);
+  if (method === 'notifications/initialized') return;
+  return fail(id, -32601, `Method not found: ${method}`);
 }
 
-// ── Stdio transport ──────────────────────────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 export function startMcpServer() {
-  process.stderr.write('[software-factory MCP server] Ready\n');
-
+  process.stderr.write('[software-factory MCP] Ready. Tools: ' + TOOLS.map(t => t.name).join(', ') + '\n');
   const rl = createInterface({ input: process.stdin, terminal: false });
-
-  rl.on('line', async (line) => {
+  rl.on('line', async line => {
     if (!line.trim()) return;
     let req;
-    try {
-      req = JSON.parse(line);
-    } catch {
-      return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
-    }
-    await handleRequest(req);
+    try { req = JSON.parse(line); }
+    catch { return send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }); }
+    await handle(req);
   });
-
   rl.on('close', () => process.exit(0));
 }
