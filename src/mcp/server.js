@@ -28,7 +28,7 @@ async function ghRequest(method, path, body, token) {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
-      'User-Agent': 'software-factory/0.1.6',
+      'User-Agent': 'software-factory/0.2.0',
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -739,7 +739,7 @@ async function handle(req) {
   if (method === 'initialize') {
     return ok(id, {
       protocolVersion: '2024-11-05',
-      serverInfo: { name: 'software-factory', version: '0.1.9' },
+      serverInfo: { name: 'software-factory', version: '0.2.0' },
       capabilities: { tools: {} },
     });
   }
@@ -776,7 +776,7 @@ async function handle(req) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 export function startMcpServer() {
-  process.stderr.write('[software-factory MCP v0.1.6] Ready\n');
+  process.stderr.write('[software-factory MCP v0.2.0] Ready\n');
   process.stderr.write('Tools: ' + TOOLS.map(t => t.name).join(', ') + '\n');
   const rl = createInterface({ input: process.stdin, terminal: false });
   rl.on('line', async line => {

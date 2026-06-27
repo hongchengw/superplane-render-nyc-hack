@@ -54,8 +54,12 @@ function extractResultField(runs, nodeId, field) {
   const run = runs[0];
   const execs = run.executions || [];
   const exec = execs.find(e => e.nodeId === nodeId);
-  return exec?.result?.[field] ?? null;
+  if (!exec) return null;
+  // Try resultData first, then outputs.data[0].result
+  const resData = exec.resultData || exec.outputs?.data?.[0]?.result;
+  return resData?.[field] ?? null;
 }
+
 
 function renderProgress(runs) {
   if (!runs?.length) return;
