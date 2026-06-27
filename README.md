@@ -385,6 +385,6 @@ node bin/factory.js --help
 
 Built with [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com)
 
-MIT © [Roshan Sharma](https://github.com/roshaninfordham), Hong Cheng Wang (https://github.com/hongchengw)
+MIT © [Roshan Sharma](https://github.com/roshaninfordham), Hong Cheng Wang (https://github.com/hongchengw), Berton Yeh (https://github.com/berber54)
 
 </div>
