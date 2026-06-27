@@ -1,0 +1,15 @@
+{
+  "name": "markdown-render-poc",
+  "version": "1.0.0",
+  "description": "POC: Markdown view mode with Mermaid.js diagrams, @mention chips, and full markdown rendering",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "marked": "^14.0.0",
+    "highlight.js": "^11.10.0"
+  }
+}

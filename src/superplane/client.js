@@ -49,10 +49,11 @@ export class SuperPlaneClient {
     return this.get(`/canvases/${canvasId}/nodes/${nodeId}/executions`);
   }
 
-  async triggerCanvas(canvasId, triggerId, parameters = {}) {
+  // template param is REQUIRED by the start hook to select which template to use
+  async triggerCanvas(canvasId, triggerId, userParameters = {}, templateName = 'Build Issue') {
     return this.post(
       `/canvases/${canvasId}/triggers/${triggerId}/hooks/run`,
-      { parameters }
+      { parameters: { template: templateName, ...userParameters } }
     );
   }
 
