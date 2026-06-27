@@ -28,7 +28,7 @@ async function ghRequest(method, path, body, token) {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
-      'User-Agent': 'software-factory/0.2.0',
+      'User-Agent': 'software-factory/0.2.1',
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -64,12 +64,60 @@ function renderServiceName(repo) {
   return `factory-${slug}`;
 }
 
+/**
+ * Auto-trigger the SuperPlane pipeline for a given issue URL.
+ * This ensures every workflow is visible in the SuperPlane cloud canvas.
+ * Returns a status message to embed in tool output, or null if not configured.
+ */
+async function autoTriggerPipeline(issueUrl, repo) {
+  const cfg = getConfig();
+  if (!cfg.spToken || !cfg.canvasId) return null;
+  try {
+    const client = new SuperPlaneClient(cfg.spToken);
+    const targetRepo = repo || cfg.targetRepo;
+    await client.triggerCanvas(
+      cfg.canvasId,
+      cfg.canvasTriggerNodeId || 'start',
+      { issue_url: issueUrl, repo: targetRepo },
+      cfg.canvasTemplateName || 'Build Issue',
+    );
+    return [
+      ``,
+      `---`,
+      `## 🚀 SuperPlane Pipeline Auto-Triggered`,
+      ``,
+      `The full autonomous pipeline is now running end-to-end on SuperPlane.`,
+      `Every stage is live and visible in the SuperPlane cloud canvas:`,
+      ``,
+      `  🌐 Canvas: https://app.superplane.com/canvases/${cfg.canvasId}`,
+      ``,
+      `Pipeline stages (all running in SuperPlane cloud):`,
+      `  1. fetch-issue          → reads issue from GitHub`,
+      `  2. requirement-agent    → Claude writes implementation spec with Mermaid diagram`,
+      `  3. implementation-agent → Claude writes code and pushes branch`,
+      `  4. validation-agent     → runs npm test / lint / build`,
+      `  5. render-deploy        → deploys poc/public/ to Render (~20s)`,
+      `  6. pr-agent             → opens PR + posts preview URL on issue`,
+      ``,
+      `📊 Monitor progress: call \`get_pipeline_status\` every 10-15 seconds until STATE_FINISHED.`,
+      `   When finished, extract 🚀 Preview URL and 🔀 PR URL from the status output.`,
+      ``,
+      `⚠️  The pipeline is handling the full implementation autonomously.`,
+      `   You do NOT need to call push_branch, deploy_preview, or create_pr manually.`,
+      `   Just poll get_pipeline_status until complete, then report the URLs to the user.`,
+    ].join('\n');
+  } catch (e) {
+    process.stderr.write(`[factory] auto-trigger failed (non-fatal): ${e.message}\n`);
+    return null;
+  }
+}
+
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOLS = [
   {
     name: 'factory_doctor',
-    description: 'Check that the Software Factory is correctly configured. Run this first to verify everything is set up.',
+    description: 'Check that the Software Factory is correctly configured. Run this first to verify SuperPlane, GitHub, and Render are all connected.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -79,7 +127,12 @@ const TOOLS = [
       '  • A repo URL (https://github.com/owner/repo) → reads SPEC.md, spec.md, PROMPT.md, or README.md',
       '  • A specific file URL (https://github.com/owner/repo/blob/main/SPEC.md) → reads that file',
       '  • An issue URL (https://github.com/owner/repo/issues/42) → reads the issue title + body',
-      'Returns: the full spec text plus repo and issue metadata. Use this FIRST to understand what to build.',
+      '',
+      'IMPORTANT: When called with an issue URL and SuperPlane is configured, this tool automatically',
+      'triggers the full autonomous pipeline in SuperPlane so the entire workflow is visible in the',
+      'SuperPlane cloud canvas. After calling this, you should call get_pipeline_status to monitor.',
+      '',
+      'Returns: the full spec text, repo metadata, and SuperPlane pipeline status if auto-triggered.',
     ].join('\n'),
     inputSchema: {
       type: 'object',
@@ -121,6 +174,10 @@ const TOOLS = [
       'Push one or more files to a new GitHub branch. Use after implementing the solution.',
       'IMPORTANT: Always include poc/public/index.html — a static HTML demo page showing what was built.',
       'The demo page is what gets deployed to Render as a live preview.',
+      '',
+      'NOTE: If fetch_github_spec already triggered the SuperPlane autonomous pipeline,',
+      'you should NOT call this manually — the pipeline handles push, deploy, and PR automatically.',
+      'Only call this if you are doing a fully manual implementation workflow.',
     ].join('\n'),
     inputSchema: {
       type: 'object',
@@ -153,6 +210,9 @@ const TOOLS = [
       'On repeat calls for the same repo, updates the existing service (fast redeploy ~20s).',
       'The deployed files come from the poc/public/ directory in the branch.',
       'Call this AFTER push_branch.',
+      '',
+      'NOTE: If fetch_github_spec already triggered the SuperPlane autonomous pipeline,',
+      'you should NOT call this manually — the pipeline handles deployment automatically.',
     ].join('\n'),
     inputSchema: {
       type: 'object',
@@ -179,7 +239,13 @@ const TOOLS = [
   },
   {
     name: 'create_pr',
-    description: 'Open a GitHub pull request and post a comment on the original issue with the preview URL. Call this AFTER deploy_preview.',
+    description: [
+      'Open a GitHub pull request and post a comment on the original issue with the preview URL.',
+      'Call this AFTER deploy_preview.',
+      '',
+      'NOTE: If fetch_github_spec already triggered the SuperPlane autonomous pipeline,',
+      'you should NOT call this manually — the pipeline opens the PR automatically.',
+    ].join('\n'),
     inputSchema: {
       type: 'object',
       properties: {
@@ -196,12 +262,28 @@ const TOOLS = [
   },
   {
     name: 'get_pipeline_status',
-    description: 'Get the current SuperPlane pipeline run history.',
+    description: [
+      'Get the current SuperPlane pipeline run status and progress.',
+      'Poll this every 10-15 seconds after triggering a pipeline until STATE_FINISHED.',
+      'Returns live stage-by-stage progress visible in the SuperPlane cloud canvas,',
+      'plus the 🚀 Preview URL and 🔀 PR URL when the pipeline finishes.',
+      '',
+      'This is the PRIMARY monitoring tool — use it after fetch_github_spec or',
+      'trigger_autonomous_pipeline to watch the full workflow in real time.',
+    ].join('\n'),
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'trigger_autonomous_pipeline',
-    description: 'Trigger the fully autonomous Software Factory pipeline (SuperPlane runs everything end-to-end). Takes 5–15 minutes. Requires Anthropic API key in SuperPlane secrets.',
+    description: [
+      'Trigger the fully autonomous Software Factory pipeline on SuperPlane.',
+      'SuperPlane runs everything end-to-end: spec → code → deploy → PR.',
+      'The entire workflow is visible live in the SuperPlane cloud canvas.',
+      'Takes 5–15 minutes. Requires Anthropic API key stored in SuperPlane secrets.',
+      '',
+      'Use this as the PRIMARY workflow. After triggering, poll get_pipeline_status',
+      'every 10-15 seconds until the run is STATE_FINISHED, then report the URLs.',
+    ].join('\n'),
     inputSchema: {
       type: 'object',
       properties: {
@@ -248,57 +330,85 @@ function parseGitHubUrl(url) {
 }
 
 async function impl_fetchSpec({ url }) {
-  const { githubToken } = getConfig();
+  const cfg = getConfig();
+  const { githubToken } = cfg;
   if (!githubToken) throw new Error('GitHub token not configured. Run: npx software-factory init');
 
   const parsed = parseGitHubUrl(url);
 
   if (parsed.type === 'issue') {
+    const issueUrl = url;
     const issue = await ghRequest('GET', `/repos/${parsed.repo}/issues/${parsed.number}`, null, githubToken);
     let comments = [];
     try {
       const raw = await ghRequest('GET', `/repos/${parsed.repo}/issues/${parsed.number}/comments?per_page=5`, null, githubToken);
       comments = raw.map(c => `@${c.user.login}: ${c.body}`);
     } catch {}
-    return [
+
+    const specParts = [
       `TYPE: GitHub Issue`,
       `REPO: ${parsed.repo}`,
       `ISSUE: #${parsed.number} — ${issue.title}`,
-      `URL: ${url}`,
+      `URL: ${issueUrl}`,
       `STATE: ${issue.state}`,
       `LABELS: ${issue.labels.map(l => l.name).join(', ') || 'none'}`,
       ``,
       `## Issue Description`,
       issue.body || '(no description)',
       comments.length ? `\n## Comments\n${comments.join('\n\n')}` : '',
-      ``,
-      `NEXT STEPS:`,
-      `1. get_repo_structure("${parsed.repo}") — explore the codebase`,
-      `2. read_repo_file — read key files`,
-      `3. [implement the changes in your own context]`,
-      `4. push_branch — push implementation + a poc/public/index.html demo page`,
-      `5. deploy_preview — get live Render URL (~20s)`,
-      `6. create_pr — open PR + comment preview link on this issue`,
-    ].join('\n');
+    ];
+
+    // Auto-trigger SuperPlane pipeline so the workflow is always visible in the cloud
+    const pipelineNotice = await autoTriggerPipeline(issueUrl, parsed.repo);
+
+    if (pipelineNotice) {
+      // Pipeline triggered — guide agent to monitor SuperPlane instead of doing manual steps
+      specParts.push(pipelineNotice);
+    } else {
+      // No SuperPlane configured — give manual next steps
+      specParts.push(
+        ``,
+        `NEXT STEPS:`,
+        `1. get_repo_structure("${parsed.repo}") — explore the codebase`,
+        `2. read_repo_file — read key files`,
+        `3. [implement the changes in your own context]`,
+        `4. push_branch — push implementation + a poc/public/index.html demo page`,
+        `5. deploy_preview — get live Render URL (~20s)`,
+        `6. create_pr — open PR + comment preview link on this issue`,
+      );
+    }
+
+    return specParts.filter(x => x !== undefined).join('\n');
   }
 
   if (parsed.type === 'file') {
     const data = await ghRequest('GET', `/repos/${parsed.repo}/contents/${parsed.path}?ref=${parsed.branch}`, null, githubToken);
     const content = Buffer.from(data.content, 'base64').toString('utf8');
-    return [
+    const specParts = [
       `TYPE: GitHub File Spec`,
       `REPO: ${parsed.repo}`,
       `FILE: ${parsed.path} (branch: ${parsed.branch})`,
       ``,
       content,
-      ``,
-      `NEXT STEPS:`,
-      `1. get_repo_structure("${parsed.repo}") — explore the codebase`,
-      `2. [implement what's described in the spec above]`,
-      `3. push_branch to ${parsed.repo} — push implementation + poc/public/index.html demo`,
-      `4. deploy_preview — get live Render URL`,
-      `5. create_pr — open PR with preview link`,
-    ].join('\n');
+    ];
+
+    // For file specs, check if they describe an issue-like task and auto-trigger
+    const syntheticUrl = `https://github.com/${parsed.repo}`;
+    const pipelineNotice = await autoTriggerPipeline(syntheticUrl, parsed.repo);
+    if (pipelineNotice) {
+      specParts.push(pipelineNotice);
+    } else {
+      specParts.push(
+        ``,
+        `NEXT STEPS:`,
+        `1. get_repo_structure("${parsed.repo}") — explore the codebase`,
+        `2. [implement what's described in the spec above]`,
+        `3. push_branch to ${parsed.repo} — push implementation + poc/public/index.html demo`,
+        `4. deploy_preview — get live Render URL`,
+        `5. create_pr — open PR with preview link`,
+      );
+    }
+    return specParts.join('\n');
   }
 
   // type === 'repo': look for SPEC.md, spec.md, PROMPT.md, README.md
@@ -319,10 +429,9 @@ async function impl_fetchSpec({ url }) {
 
   if (!specContent) throw new Error(`No spec file found in ${parsed.repo}. Expected SPEC.md, spec.md, PROMPT.md, or README.md`);
 
-  // Get repo info
   const repoInfo = await ghRequest('GET', `/repos/${parsed.repo}`, null, githubToken);
 
-  return [
+  const specParts = [
     `TYPE: GitHub Repo Spec`,
     `REPO: ${parsed.repo}`,
     `SPEC FILE: ${specFile}`,
@@ -331,15 +440,25 @@ async function impl_fetchSpec({ url }) {
     ``,
     `## Spec`,
     specContent,
-    ``,
-    `NEXT STEPS:`,
-    `1. get_repo_structure("${parsed.repo}") — explore the existing codebase`,
-    `2. read_repo_file — read key files to understand what already exists`,
-    `3. [implement what the spec describes — write code, tests, etc.]`,
-    `4. push_branch to ${parsed.repo} — include ALL implementation files + poc/public/index.html as a demo page`,
-    `5. deploy_preview("${parsed.repo}", branch) — deploys poc/public/ to Render, returns live URL`,
-    `6. create_pr — open PR with Mermaid diagrams, tests passing, and preview URL`,
-  ].join('\n');
+  ];
+
+  // Auto-trigger for repo URLs too
+  const pipelineNotice = await autoTriggerPipeline(url, parsed.repo);
+  if (pipelineNotice) {
+    specParts.push(pipelineNotice);
+  } else {
+    specParts.push(
+      ``,
+      `NEXT STEPS:`,
+      `1. get_repo_structure("${parsed.repo}") — explore the existing codebase`,
+      `2. read_repo_file — read key files to understand what already exists`,
+      `3. [implement what the spec describes — write code, tests, etc.]`,
+      `4. push_branch to ${parsed.repo} — include ALL implementation files + poc/public/index.html as a demo page`,
+      `5. deploy_preview("${parsed.repo}", branch) — deploys poc/public/ to Render, returns live URL`,
+      `6. create_pr — open PR with Mermaid diagrams, tests passing, and preview URL`,
+    );
+  }
+  return specParts.join('\n');
 }
 
 async function impl_getRepoStructure({ repo, path = '', branch }) {
@@ -551,7 +670,7 @@ async function impl_createPR({ repo, branch, base = 'main', title, body = '', is
     body,
     preview_url ? `\n## 🚀 Live Preview\n${preview_url}` : '',
     issue_url ? `\nCloses ${issue_url}` : '',
-    `\n---\n*Built with [Software Factory](https://www.npmjs.com/package/software-factory) · Deployed on [Render](https://render.com)*`,
+    `\n---\n*Built with [Software Factory](https://www.npmjs.com/package/software-factory) · Deployed on [Render](https://render.com) · Orchestrated by [SuperPlane](https://superplane.com)*`,
   ].filter(Boolean).join('\n');
 
   const pr = await ghRequest('POST', `/repos/${repo}/pulls`, {
@@ -580,7 +699,7 @@ async function impl_createPR({ repo, branch, base = 'main', title, body = '', is
         preview_url ? `| Deploy to Render | ✅ Live |` : `| Deploy | ⏳ |`,
         `| Pull Request | ✅ Open |`,
         ``,
-        `*Built with [Software Factory](https://www.npmjs.com/package/software-factory)*`,
+        `*Built with [Software Factory](https://www.npmjs.com/package/software-factory) · Orchestrated by [SuperPlane](https://superplane.com)*`,
       ].filter(Boolean).join('\n');
 
       await ghRequest('POST', `/repos/${issueRepo}/issues/${number}/comments`, { body: comment }, githubToken);
@@ -607,6 +726,9 @@ async function impl_pipelineStatus() {
   const STAGES = ['start','fetch-issue','requirement-agent','implementation-agent','validation-agent','render-deploy','pr-agent','create-pr'];
   const lines = [];
 
+  lines.push(`🌐 Canvas: https://app.superplane.com/canvases/${cfg.canvasId}`);
+  lines.push('');
+
   for (const [i, run] of runs.slice(0, 3).entries()) {
     const execs = run.executions || [];
     const byNode = {};
@@ -615,7 +737,7 @@ async function impl_pipelineStatus() {
       ? fmtMs(new Date(run.finishedAt) - new Date(run.createdAt))
       : fmtMs(Date.now() - new Date(run.createdAt)) + ' (running)';
 
-    lines.push(`[${i}] ${run.id.slice(0,8)}… ${run.state} (${dur})`);
+    lines.push(`Run [${i}] ${run.id.slice(0,8)}… state=${run.state} (${dur})`);
 
     let previewUrl = null;
     let prUrl = null;
@@ -623,8 +745,18 @@ async function impl_pipelineStatus() {
     for (const nodeId of STAGES) {
       const ex = byNode[nodeId];
       if (!ex) continue;
-      const icon = ex.result === 'RESULT_PASSED' ? '✅' : ex.result === 'RESULT_FAILED' ? '❌' : '⟳';
-      lines.push(`  ${icon} ${nodeId}`);
+      const icon = ex.result === 'RESULT_PASSED' ? '✅'
+        : ex.result === 'RESULT_FAILED' ? '❌'
+        : ex.state === 'STATE_STARTED' ? '⟳'
+        : '·';
+
+      const dur = (ex.state === 'STATE_FINISHED' && ex.createdAt && ex.updatedAt)
+        ? ` (${fmtMs(new Date(ex.updatedAt) - new Date(ex.createdAt))})`
+        : ex.state === 'STATE_STARTED' && ex.createdAt
+        ? ` (${fmtMs(Date.now() - new Date(ex.createdAt))} running…)`
+        : '';
+
+      lines.push(`  ${icon} ${nodeId.padEnd(26)}${dur}`);
 
       const result = ex.resultData || ex.outputs?.data?.[0]?.result;
       if (nodeId === 'render-deploy' && ex.result === 'RESULT_PASSED') {
@@ -636,12 +768,20 @@ async function impl_pipelineStatus() {
     }
 
     if (previewUrl) lines.push(`  🚀 Preview URL: ${previewUrl}`);
-    if (prUrl) lines.push(`  🔀 PR URL:      ${prUrl}`);
+    if (prUrl)      lines.push(`  🔀 PR URL:      ${prUrl}`);
+
+    // Summary for finished runs
+    if (run.state === 'STATE_FINISHED') {
+      if (previewUrl && prUrl) {
+        lines.push(`  ✅ Pipeline complete!`);
+      } else if (run.result === 'RESULT_FAILED') {
+        lines.push(`  ❌ Pipeline failed — check canvas for logs`);
+      }
+    }
 
     if (i < 2) lines.push('');
   }
 
-  lines.push(`\nCanvas: https://app.superplane.com/canvases/${cfg.canvasId}`);
   return lines.join('\n');
 }
 
@@ -649,11 +789,21 @@ async function impl_triggerAutonomous({ issue_url, repo }) {
   const cfg = getConfig();
   if (!cfg.spToken || !cfg.canvasId) throw new Error('Not configured. Run: npx software-factory init');
 
-  const { repo: parsedRepo, url } = parseIssueUrl(issue_url);
+  let parsedRepo, url;
+  try {
+    const parsed = parseIssueUrl(issue_url);
+    parsedRepo = parsed.repo;
+    url = parsed.url;
+  } catch {
+    // Accept repo URLs too
+    url = issue_url;
+    parsedRepo = issue_url.replace('https://github.com/', '');
+  }
+
   const targetRepo = repo || cfg.targetRepo || parsedRepo;
 
   const client = new SuperPlaneClient(cfg.spToken);
-  const result = await client.triggerCanvas(
+  await client.triggerCanvas(
     cfg.canvasId,
     cfg.canvasTriggerNodeId || 'start',
     { issue_url: url, repo: targetRepo },
@@ -661,12 +811,23 @@ async function impl_triggerAutonomous({ issue_url, repo }) {
   );
 
   return [
-    `✅ Autonomous pipeline triggered!`,
-    `Issue: ${url}`,
-    `Repo:  ${targetRepo}`,
+    `✅ Autonomous pipeline triggered on SuperPlane!`,
     ``,
-    `Monitor: get_pipeline_status`,
-    `Canvas: https://app.superplane.com/canvases/${cfg.canvasId}`,
+    `Issue:  ${url}`,
+    `Repo:   ${targetRepo}`,
+    ``,
+    `The full pipeline is now running end-to-end on SuperPlane cloud:`,
+    `  1. fetch-issue          → reading GitHub issue`,
+    `  2. requirement-agent    → Claude writing spec + Mermaid diagram`,
+    `  3. implementation-agent → Claude writing code + pushing branch`,
+    `  4. validation-agent     → running npm test / lint / build`,
+    `  5. render-deploy        → deploying poc/public/ to Render`,
+    `  6. pr-agent             → opening PR + commenting preview URL`,
+    ``,
+    `🌐 Watch live: https://app.superplane.com/canvases/${cfg.canvasId}`,
+    ``,
+    `📊 Next: call get_pipeline_status every 10-15 seconds to track progress.`,
+    `   When state=STATE_FINISHED, extract 🚀 Preview URL and 🔀 PR URL.`,
   ].join('\n');
 }
 
@@ -682,7 +843,8 @@ async function impl_doctor() {
       if (cfg.canvasId) {
         try {
           const { canvas } = await client.getCanvas(cfg.canvasId);
-          lines.push(`✅ Canvas        "${canvas.metadata?.name}" (${cfg.canvasId.slice(0,8)}…)`);
+          lines.push(`✅ Canvas        "${canvas.metadata?.name || canvas.name}" (${cfg.canvasId.slice(0,8)}…)`);
+          lines.push(`   🌐 https://app.superplane.com/canvases/${cfg.canvasId}`);
         } catch { lines.push(`❌ Canvas        Not found — run: npx software-factory init`); }
       } else {
         lines.push(`❌ Canvas        Not set — run: npx software-factory init`);
@@ -719,11 +881,18 @@ async function impl_doctor() {
   const allGood = !lines.some(l => l.startsWith('❌'));
   lines.push('');
   if (allGood) {
-    lines.push('✅ Ready! Give me a GitHub URL:\n');
+    lines.push('✅ All systems operational! End-to-end workflow:');
+    lines.push('');
+    lines.push('  1. Give the agent a GitHub issue/repo URL');
+    lines.push('  2. fetch_github_spec → auto-triggers SuperPlane pipeline');
+    lines.push('  3. SuperPlane runs: spec → code → deploy → PR (all visible in cloud)');
+    lines.push('  4. get_pipeline_status → poll until complete');
+    lines.push('  5. Report 🚀 Preview URL + 🔀 PR URL to user');
+    lines.push('');
     lines.push('  • Repo with spec:  https://github.com/owner/repo');
     lines.push('  • Specific file:   https://github.com/owner/repo/blob/main/SPEC.md');
     lines.push('  • Issue to fix:    https://github.com/owner/repo/issues/42');
-    lines.push('\nFlow: fetch_github_spec → [read files] → [write code] → push_branch → deploy_preview → create_pr');
+    lines.push(`\n  🌐 Canvas: https://app.superplane.com/canvases/${cfg.canvasId || '<not set>'}`);
   } else {
     lines.push('Run: npx software-factory init');
   }
@@ -739,7 +908,7 @@ async function handle(req) {
   if (method === 'initialize') {
     return ok(id, {
       protocolVersion: '2024-11-05',
-      serverInfo: { name: 'software-factory', version: '0.2.0' },
+      serverInfo: { name: 'software-factory', version: '0.2.1' },
       capabilities: { tools: {} },
     });
   }
@@ -776,7 +945,7 @@ async function handle(req) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 export function startMcpServer() {
-  process.stderr.write('[software-factory MCP v0.2.0] Ready\n');
+  process.stderr.write('[software-factory MCP v0.2.1] Ready\n');
   process.stderr.write('Tools: ' + TOOLS.map(t => t.name).join(', ') + '\n');
   const rl = createInterface({ input: process.stdin, terminal: false });
   rl.on('line', async line => {
