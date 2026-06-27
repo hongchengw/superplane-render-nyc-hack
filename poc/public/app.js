@@ -28,14 +28,9 @@ function switchMode(mode) {
 async function renderMarkdown(markdown) {
   currentMarkdown = markdown;
   try {
-    const res = await fetch('/api/render', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markdown }),
-    });
-    const data = await res.json();
+    const html = marked.parse(markdown);
     const container = document.getElementById('rendered-content');
-    container.innerHTML = preprocessMermaidBlocks(data.html);
+    container.innerHTML = preprocessMermaidBlocks(html);
     renderMermaidDiagrams(container);
     renderMentions(container);
     hljs.highlightAll();

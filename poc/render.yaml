@@ -1,9 +1,11 @@
 services:
-  - type: web
-    name: markdown-render-poc
-    env: node
-    region: oregon
-    plan: free
-    buildCommand: npm install
-    startCommand: npm start
-    healthCheckPath: /
+  - type: static_site
+    name: software-factory-poc
+    rootDir: poc/public
+    buildCommand: ""
+    publishPath: .
+    pullRequestPreviewsEnabled: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
