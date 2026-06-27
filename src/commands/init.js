@@ -1,5 +1,9 @@
 import chalk from 'chalk';
 import { createInterface } from 'readline';
+import { execSync } from 'child_process';
+import { writeFileSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { SuperPlaneClient } from '../superplane/client.js';
 import { buildCanvasSpec } from '../superplane/canvas-template.js';
 import { loadConfig, saveConfig } from '../config.js';
@@ -156,14 +160,54 @@ export async function runInit(options = {}) {
     });
 
     console.log(chalk.green('\n✔ Configuration saved to ~/.factory/config.json'));
-    console.log(chalk.bold.cyan('\n🏭 Software Factory is ready!\n'));
 
-    console.log(chalk.bold('Workflow options:\n'));
-    console.log(chalk.bold('  A) With your AI agent (recommended):'));
-    console.log(`     ${chalk.cyan('claude mcp add software-factory -- npx software-factory mcp')}`);
-    console.log(`     Then tell your agent: "Implement ${chalk.dim('<github-issue-url>')} and deploy to Render"\n`);
-    console.log(chalk.bold('  B) Autonomous pipeline (no agent needed):'));
-    console.log(`     ${chalk.cyan('factory build <github-issue-url> --follow')}\n`);
+    // ── Auto-register MCP server ────────────────────────────────────────────
+    console.log(chalk.bold('\nWiring up MCP server…'));
+
+    // Claude Code
+    let claudeOk = false;
+    try {
+      execSync('claude mcp add software-factory -- npx software-factory mcp', { stdio: 'pipe' });
+      console.log(chalk.green('  ✔ Claude Code: MCP registered (claude mcp add software-factory)'));
+      claudeOk = true;
+    } catch {
+      console.log(chalk.dim('  · Claude Code not found or already registered'));
+    }
+
+    // Write ~/.mcp.json for Codex / OpenCode / any MCP-compatible agent
+    try {
+      const mcpConfig = {
+        mcpServers: {
+          'software-factory': {
+            command: 'npx',
+            args: ['software-factory', 'mcp'],
+          },
+        },
+      };
+      const mcpPath = join(homedir(), '.mcp.json');
+      writeFileSync(mcpPath, JSON.stringify(mcpConfig, null, 2) + '\n');
+      console.log(chalk.green(`  ✔ Codex/OpenCode: ~/.mcp.json written`));
+    } catch {
+      console.log(chalk.dim('  · Could not write ~/.mcp.json'));
+    }
+
+    console.log(chalk.bold.cyan('\n🏭 Software Factory is ready!\n'));
+    console.log('  Give your AI agent a GitHub URL and say:\n');
+    console.log(chalk.bold('  "Use software-factory tools to build and deploy this:"'));
+    console.log(chalk.cyan('  https://github.com/owner/repo'));
+    console.log(chalk.dim('  (repo with SPEC.md, a specific .md file, or an issue URL)\n'));
+    console.log(chalk.bold('The agent will:'));
+    console.log('  1. fetch_github_spec   — read the spec/issue');
+    console.log('  2. get_repo_structure  — explore the codebase');
+    console.log('  3. [write code]        — implement it');
+    console.log('  4. push_branch         — push to GitHub');
+    console.log('  5. deploy_preview      — get a live Render URL in ~20s');
+    console.log('  6. create_pr           — open PR + post preview link\n');
+    if (!claudeOk) {
+      console.log(chalk.bold('Manual MCP setup (one time per agent):'));
+      console.log(`  Claude Code: ${chalk.cyan('claude mcp add software-factory -- npx software-factory mcp')}`);
+      console.log(`  Codex/OpenCode: ${chalk.cyan('~/.mcp.json already written ✔')}\n`);
+    }
     console.log(chalk.dim(`Canvas: https://app.superplane.com/canvases/${canvasId}\n`));
 
   } finally {
