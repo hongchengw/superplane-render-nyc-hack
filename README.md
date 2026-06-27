@@ -16,22 +16,20 @@
 
 Built at the **SuperPlane Hackathon: Bash Script Funeral /w Render** · NYC, June 27 2026
 
-[**npm package →**](https://www.npmjs.com/package/software-factory) · [**SuperPlane canvas →**](https://app.superplane.com) · [**Demo issues ↓**](#demo-issues)
+[**npm →**](https://www.npmjs.com/package/software-factory) · [**SuperPlane canvas →**](https://app.superplane.com) · [**Demo issues ↓**](#demo-issues)
 
 </div>
 
 ---
 
-## Install & Run
+## Quick Start
 
 ```bash
 npx software-factory init
-npx software-factory build https://github.com/org/repo/issues/42
+npx software-factory build https://github.com/owner/repo/issues/42
 ```
 
-That's it. The factory runs overnight and wakes up with a live preview URL posted to the PR.
-
-> **Available on npm:** [`software-factory`](https://www.npmjs.com/package/software-factory) — install globally with `npm i -g software-factory` or run one-off with `npx software-factory`.
+The pipeline runs in SuperPlane overnight. Next morning, a PR with a live Render preview URL is posted to the issue.
 
 ---
 
@@ -41,23 +39,18 @@ That's it. The factory runs overnight and wakes up with a live preview URL poste
 you:  npx software-factory build https://github.com/org/repo/issues/42
 
       ╔══════════════════ SuperPlane Canvas ══════════════════╗
-      ║                                                        ║
-      ║  [1] Fetch Issue      → reads title, body, labels     ║
-      ║  [2] Requirement Agent→ Claude writes spec.md         ║
-      ║  [3] Implementation   → Claude writes code, pushes    ║
-      ║  [4] Validation       → npm install → lint → test     ║
-      ║  [5] Deploy to Render → preview env spun up           ║
-      ║  [6] PR Agent         → PR opened + issue commented   ║
-      ║                                                        ║
+      ║  [1] Fetch Issue       reads title, body, labels      ║
+      ║  [2] Requirement Agent writes a precise spec.md       ║
+      ║  [3] Implementation    clones repo, writes code       ║
+      ║  [4] Validation        npm install → lint → test      ║
+      ║  [5] Deploy to Render  preview environment live       ║
+      ║  [6] PR Agent          PR opened + issue commented    ║
       ╚════════════════════════════════════════════════════════╝
 
-      ~8 hours later, you check GitHub:
-
+      ~8 hours later:
       PR:      "feat: implement issue #42 [Software Factory]"
       Preview: https://your-service.onrender.com ✅
 ```
-
-Every stage validates the previous one. If tests fail, the pipeline stops and reports exactly what broke.
 
 ---
 
@@ -67,22 +60,22 @@ Every stage validates the previous one. If tests fail, the pipeline stops and re
 flowchart LR
     A([🚀 Start\nTrigger]) -->|issue_url\nrepo| B
 
-    B["📋 Fetch Issue\n─────────────\nGitHub REST API\ncurl + jq"]
+    B["📋 Fetch Issue\n─────────────\nGitHub REST API"]
     B -->|passed| C
 
-    C["🧠 Requirement\nAgent\n─────────────\nClaude Sonnet\ngenerates spec.md"]
+    C["🧠 Requirement\nAgent\n─────────────\nGenerates spec.md"]
     C -->|passed| D
 
-    D["⚙️ Implementation\nAgent\n─────────────\nClaude Sonnet\nwrites code\ngit push branch"]
+    D["⚙️ Implementation\nAgent\n─────────────\nWrites code\ngit push branch"]
     D -->|passed| E
 
-    E["✅ Validation\nAgent\n─────────────\nnpm install\nlint · build\ntest"]
+    E["✅ Validation\nAgent\n─────────────\nnpm install\nlint · build · test"]
     E -->|passed| F
 
-    F["🚢 Deploy to\nRender\n─────────────\nRender API\npreview env"]
+    F["🚢 Deploy to\nRender\n─────────────\nPreview env live"]
     F -->|passed| G
 
-    G["🔀 PR Agent\n─────────────\nGitHub API\nopen PR\ncomment issue"]
+    G["🔀 PR Agent\n─────────────\nOpen PR\nComment issue"]
 
     style A fill:#7fe2b4,stroke:#333,color:#000
     style G fill:#46E3B7,stroke:#333,color:#000
@@ -96,13 +89,13 @@ flowchart LR
 graph TB
     subgraph cli["🖥️  CLI  (npx software-factory)"]
         direction LR
-        init["factory init\n──────────\nwizard: stores\nAPI keys as\nSuperPlane secrets\ncreates canvas"]
-        build["factory build\n──────────\nparses issue URL\ntriggers canvas\nreturns run ID"]
-        status["factory status\n──────────\nlive run state\nper-node icons\n--watch mode"]
-        logs["factory logs\n──────────\nper-stage\nexecution output"]
+        init["factory init\n──────────\nStores API keys\nas SP secrets\nCreates canvas"]
+        build["factory build\n──────────\nParses issue URL\nTriggers canvas"]
+        status["factory status\n──────────\nLive run state\n--watch mode"]
+        logs["factory logs\n──────────\nPer-stage output"]
     end
 
-    subgraph sp["⚡  SuperPlane Canvas  (orchestration + state + retries)"]
+    subgraph sp["⚡  SuperPlane Canvas  (orchestration · state · retries)"]
         direction LR
         t([start])
         fi[fetch-issue]
@@ -121,18 +114,18 @@ graph TB
     end
 
     subgraph ext["☁️  External Services"]
-        GH["GitHub\nREST API"]
-        AN["Anthropic\nClaude Sonnet"]
-        RE["Render\nAPI"]
+        GH["GitHub API"]
+        AN["Anthropic API"]
+        RE["Render API"]
     end
 
-    build -->|"POST /hooks/run\n{issue_url, repo}"| t
-    status & logs -->|"GET /runs\n/executions"| sp
+    build -->|"POST /hooks/run"| t
+    status & logs -->|"GET /runs"| sp
 
-    fi <-->|"GET /repos/:owner/:repo\n/issues/:number"| GH
-    ra & ia <-->|"POST /v1/messages\nclaude-sonnet-4-6"| AN
-    rd <-->|"POST /v1/services\n/:id/deploys"| RE
-    pa -->|"POST /pulls\nPOST /issues/:n/comments"| GH
+    fi <--> GH
+    ra & ia <--> AN
+    rd <--> RE
+    pa --> GH
 
     style cli fill:#1a1a2e,color:#fff,stroke:#7fe2b4
     style sp  fill:#16213e,color:#fff,stroke:#46E3B7
@@ -145,6 +138,7 @@ graph TB
 
 ```bash
 npx software-factory init              # one-time setup wizard
+npx software-factory init --yes        # non-interactive (reads env vars)
 npx software-factory doctor            # verify all prerequisites
 npx software-factory build <url>       # trigger the pipeline
 npx software-factory status --watch    # live status updates
@@ -154,26 +148,41 @@ npx software-factory logs              # per-stage execution output
 ### `init`
 
 Interactive wizard that:
-- Prompts for your API keys
-- Stores them as **SuperPlane secrets** (encrypted, never written to disk)
+- Prompts for your API keys (or reads from env vars)
+- Stores them as **SuperPlane secrets** (encrypted, never written to disk unencrypted)
 - Creates the 7-node canvas on your SuperPlane account
-- Saves canvas ID + metadata to `~/.factory/config.json`
+- Saves canvas ID to `~/.factory/config.json`
+
+### `init --yes` (non-interactive)
+
+Reads everything from environment variables — designed for scripted or agent-driven setup:
+
+```bash
+export SUPERPLANE_TOKEN="your-token"
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GITHUB_TOKEN="ghp_..."
+export RENDER_API_KEY="rnd_..."          # optional
+export RENDER_SERVICE_ID="srv-..."       # optional
+export FACTORY_TARGET_REPO="owner/repo" # defaults to superplanehq/superplane
+
+npx software-factory init --yes
+```
 
 ### `doctor`
 
 ```
-  ✔ SuperPlane API          Connected
+  ✔ SuperPlane API          Connected as software-factory
   ✔ Factory Canvas          "software-factory" (f77c363f...)
-  ✔ GitHub Token            Authenticated as @you
+  ✔ GitHub Token            @your-username
   ✔ Render API Key          Render API reachable
-  ✔ Secret: anthropic-api-key
-  ✔ Secret: github-token
-  ✔ Secret: render-api-key
+  ✔ anthropic-api-key       stored
+  ✔ github-token            stored
+  ✔ render-api-key          stored
 ```
 
 ### `build <issue-url>`
 
-Accepts any of:
+Accepts any of these formats:
 
 ```bash
 factory build https://github.com/owner/repo/issues/42
@@ -181,29 +190,63 @@ factory build owner/repo#42
 factory build https://github.com/owner/repo/issues/42 --repo owner/other-repo
 ```
 
-### `status --watch`
+---
+
+## Using with AI Coding Agents
+
+Software Factory is designed to be invoked by AI coding agents. Once initialized, a single command kicks off the full overnight pipeline.
+
+### Claude Code
+
+Paste this into your Claude Code session to solve any SuperPlane issue:
+
+```
+Use software-factory to implement this issue:
+https://github.com/superplanehq/superplane/issues/5368
+
+Steps:
+1. Run `factory doctor` — if anything fails, run `factory init`
+2. Run `factory build https://github.com/superplanehq/superplane/issues/5368`
+3. Run `factory status` to confirm the pipeline started
+```
+
+### Codex / OpenCode / any agent
+
+```bash
+# One-line setup (if env vars are set):
+npx software-factory init --yes
+
+# Solve an issue:
+npx software-factory build https://github.com/superplanehq/superplane/issues/5368
+
+# Check progress:
+npx software-factory status
+```
+
+### State machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued : factory build
-    queued --> running : runner picked up
-    running --> passed : all checks green
-    running --> failed : lint / test / deploy error
-    passed --> [*] : PR + comment posted
-    failed --> [*] : pipeline halted, logs available
+    [*] --> configured : factory init
+    configured --> triggered : factory build
+    triggered --> running : SuperPlane picks up
+    running --> passed : all stages green
+    running --> failed : stage error
+    passed --> [*] : PR + preview URL posted to issue
+    failed --> [*] : halted, logs available via factory logs
 ```
 
 ---
 
 ## Setup Requirements
 
-| What | Where to get it | Used by |
-|------|----------------|---------|
+| What | Where | Used by |
+|------|-------|---------|
 | **SuperPlane API token** | [app.superplane.com](https://app.superplane.com) → Profile → API Tokens | `factory init` |
 | **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) | Requirement Agent, Implementation Agent |
-| **GitHub PAT** | GitHub → Settings → Developer → PATs (`repo` scope) | Fetch Issue, Implementation Agent, PR Agent |
+| **GitHub PAT** | GitHub → Settings → Developer → PATs (`repo` scope) | Fetch Issue, Implementation, PR Agent |
 | **Render API key** | [dashboard.render.com](https://dashboard.render.com/u/settings) → API Keys | Deploy to Render |
-| **Render Service ID** | Your Render dashboard → the target service | Deploy to Render |
+| **Render Service ID** | Render dashboard → your service | Deploy to Render |
 
 ---
 
@@ -214,16 +257,14 @@ sequenceDiagram
     participant User
     participant CLI as factory init
     participant SP as SuperPlane Secrets
-    participant Canvas as Canvas Nodes
+    participant Runner as Canvas Runner Nodes
 
-    User->>CLI: Enter ANTHROPIC_API_KEY
-    CLI->>SP: POST /api/v1/secrets {name: "anthropic-api-key", value}
-    SP-->>CLI: secret stored (encrypted at rest)
-    CLI->>Canvas: reference via {valueSource: "secret", secret: {secret: "anthropic-api-key", key: "value"}}
-    Note over Canvas: API key is injected at runtime<br/>never written to disk or logs
+    User->>CLI: Enter API keys
+    CLI->>SP: POST /api/v1/secrets (PROVIDER_LOCAL)
+    SP-->>CLI: secrets stored encrypted
+    CLI->>Runner: reference via {valueSource: "secret", secret: {name, key}}
+    Note over Runner: Keys injected at runtime<br/>never logged or written to disk
 ```
-
-Your API keys are stored once in SuperPlane's secret store. Each runner node receives them as injected environment variables at execution time.
 
 ---
 
@@ -232,21 +273,21 @@ Your API keys are stored once in SuperPlane's secret store. Each runner node rec
 ```mermaid
 graph LR
     subgraph bin["bin/"]
-        fjs["factory.js\n(CLI entrypoint\nCommander.js)"]
+        fjs["factory.js\nCommander CLI\nentrypoint"]
     end
 
     subgraph src["src/"]
         subgraph commands["commands/"]
-            ci["init.js\n─────────\nwizard +\ncanvas setup"]
-            cd["doctor.js\n─────────\nhealth checks"]
-            cb["build.js\n─────────\ntrigger run"]
-            cs["status.js\n─────────\nrun state"]
-            cl["logs.js\n─────────\nexecution logs"]
+            ci["init.js\nwizard + canvas setup\nenv var support"]
+            cd["doctor.js\nhealth checks"]
+            cb["build.js\ntrigger run"]
+            cs["status.js\nrun state"]
+            cl["logs.js\nexecution logs"]
         end
 
         subgraph superplane["superplane/"]
-            client["client.js\n─────────\nSuperPlane\nREST client"]
-            template["canvas-template.js\n─────────────────\nbuildCanvasSpec()\n7-node pipeline\ndefinition"]
+            client["client.js\nSuperPlane REST client"]
+            template["canvas-template.js\nbuildCanvasSpec()\n7-node pipeline"]
         end
 
         config["config.js\n~/.factory/config.json"]
@@ -255,8 +296,7 @@ graph LR
     fjs --> ci & cd & cb & cs & cl
     ci & cd & cb & cs & cl --> client
     ci --> template
-    ci --> config
-    cb & cs & cl --> config
+    ci & cb & cs & cl --> config
 
     style bin fill:#2d2d2d,color:#eee,stroke:#7fe2b4
     style src fill:#1a1a2e,color:#eee,stroke:#46E3B7
@@ -266,7 +306,7 @@ graph LR
 
 ## Demo Issues
 
-These are the SuperPlane issues the factory was designed to solve end-to-end:
+The factory was designed to solve these five SuperPlane issues end-to-end:
 
 ```bash
 factory build https://github.com/superplanehq/superplane/issues/5368   # Markdown view + Mermaid
@@ -287,10 +327,7 @@ npm install
 node bin/factory.js --help
 ```
 
-The pipeline definition lives entirely in [`src/superplane/canvas-template.js`](src/superplane/canvas-template.js). To add a new stage:
-1. Add a node object to the `nodes` array
-2. Wire it with an edge in the `edges` array
-3. Re-run `factory init` (or update an existing canvas via the SuperPlane API)
+The pipeline definition lives in [`src/superplane/canvas-template.js`](src/superplane/canvas-template.js). To add a stage: add a node to the `nodes` array, wire it in `edges`, then re-run `factory init`.
 
 ---
 
@@ -312,6 +349,6 @@ MIT © [Roshan Sharma](https://github.com/hongchengw)
 
 <div align="center">
 
-Built with [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com) · Models by [Anthropic](https://anthropic.com)
+Built with [SuperPlane](https://superplane.com) · Deployed on [Render](https://render.com) · Powered by [Anthropic](https://anthropic.com)
 
 </div>

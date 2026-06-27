@@ -15,12 +15,13 @@ program
   .description(chalk.bold('🏭 Software Factory') + ' — Give it a GitHub issue. Wake up to a deployed PoC.\n\n' +
     '  Powered by SuperPlane (orchestration) + Render (deployment).\n' +
     '  Every issue becomes a spec → implementation → validated → deployed pull request.\n')
-  .version('0.1.0');
+  .version('0.1.1');
 
 program
   .command('init')
   .description('Set up the Software Factory (API keys, canvas, secrets)')
-  .action(runInit);
+  .option('-y, --yes', 'Non-interactive: use env vars (SUPERPLANE_TOKEN, ANTHROPIC_API_KEY, GITHUB_TOKEN, RENDER_API_KEY)')
+  .action((opts) => runInit(opts));
 
 program
   .command('doctor')

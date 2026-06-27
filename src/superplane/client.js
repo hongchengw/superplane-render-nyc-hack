@@ -17,7 +17,10 @@ export class SuperPlaneClient {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    const data = await res.json();
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = { message: text }; }
+
     if (!res.ok) {
       throw new Error(`SuperPlane API error ${res.status}: ${data.message || JSON.stringify(data)}`);
     }
@@ -30,38 +33,17 @@ export class SuperPlaneClient {
   patch(path, body) { return this.request('PATCH', path, body); }
   delete(path) { return this.request('DELETE', path); }
 
-  async listCanvases() {
-    return this.get('/canvases');
-  }
+  async listCanvases() { return this.get('/canvases'); }
 
   async createCanvas(name, spec) {
-    return this.post('/canvases', {
-      canvas: {
-        metadata: { name },
-        spec,
-      },
-    });
+    return this.post('/canvases', { canvas: { metadata: { name }, spec } });
   }
 
-  async getCanvas(canvasId) {
-    return this.get(`/canvases/${canvasId}`);
-  }
+  async getCanvas(canvasId) { return this.get(`/canvases/${canvasId}`); }
 
-  async updateCanvas(canvasId, name, description) {
-    return this.put(`/canvases/${canvasId}`, { name, description });
-  }
+  async listRuns(canvasId) { return this.get(`/canvases/${canvasId}/runs`); }
 
-  async deleteCanvas(canvasId) {
-    return this.delete(`/canvases/${canvasId}`);
-  }
-
-  async listRuns(canvasId) {
-    return this.get(`/canvases/${canvasId}/runs`);
-  }
-
-  async getRun(canvasId, runId) {
-    return this.get(`/canvases/${canvasId}/runs/${runId}`);
-  }
+  async getRun(canvasId, runId) { return this.get(`/canvases/${canvasId}/runs/${runId}`); }
 
   async listNodeExecutions(canvasId, nodeId) {
     return this.get(`/canvases/${canvasId}/nodes/${nodeId}/executions`);
@@ -74,19 +56,29 @@ export class SuperPlaneClient {
     );
   }
 
+  // Correct proto format: metadata.name + spec.provider + spec.local.data
   async createSecret(name, value) {
-    return this.post('/secrets', { name, value });
+    return this.post('/secrets', {
+      secret: {
+        metadata: { name },
+        spec: {
+          provider: 'PROVIDER_LOCAL',
+          local: { data: { value } },
+        },
+      },
+      domainType: 'DOMAIN_TYPE_ORGANIZATION',
+    });
   }
 
-  async listSecrets() {
-    return this.get('/secrets');
+  async listSecrets() { return this.get('/secrets'); }
+
+  // Secrets returned as {metadata: {name, id, ...}, spec: {...}}
+  async secretExists(name) {
+    const { secrets } = await this.listSecrets();
+    return (secrets || []).some(s => s.metadata?.name === name || s.name === name);
   }
 
-  async getMe() {
-    return this.get('/me');
-  }
+  async getMe() { return this.get('/me'); }
 
-  async listIntegrations() {
-    return this.get('/integrations');
-  }
+  async listIntegrations() { return this.get('/integrations'); }
 }
