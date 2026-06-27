@@ -15,7 +15,7 @@ program
   .description(chalk.bold('🏭 Software Factory') + ' — Give it a GitHub issue. Wake up to a deployed PoC.\n\n' +
     '  Powered by SuperPlane (orchestration) + Render (deployment).\n' +
     '  Every issue becomes a spec → implementation → validated → deployed pull request.\n')
-  .version('0.1.1');
+  .version('0.1.2');
 
 program
   .command('init')

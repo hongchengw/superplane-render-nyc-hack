@@ -31,13 +31,14 @@ async function upsertSecret(client, name, value) {
   try {
     const exists = await client.secretExists(name);
     if (exists) {
-      console.log(chalk.dim(`  Secret "${name}" already exists.`));
-      return;
+      await client.setSecretKey(name, 'value', value);
+      console.log(chalk.green(`  ✔ Secret "${name}" updated`));
+    } else {
+      await client.createSecret(name, value);
+      console.log(chalk.green(`  ✔ Secret "${name}" created`));
     }
-    await client.createSecret(name, value);
-    console.log(chalk.green(`  ✔ Secret "${name}" created`));
   } catch (e) {
-    console.log(chalk.yellow(`  ⚠ Could not create secret "${name}": ${e.message}`));
+    console.log(chalk.yellow(`  ⚠ Could not set secret "${name}": ${e.message}`));
   }
 }
 

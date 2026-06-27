@@ -70,12 +70,23 @@ export class SuperPlaneClient {
     });
   }
 
-  async listSecrets() { return this.get('/secrets'); }
+  // domainType must be passed as query param for secrets
+  async listSecrets() {
+    return this.get('/secrets?domainType=DOMAIN_TYPE_ORGANIZATION');
+  }
 
   // Secrets returned as {metadata: {name, id, ...}, spec: {...}}
   async secretExists(name) {
     const { secrets } = await this.listSecrets();
     return (secrets || []).some(s => s.metadata?.name === name || s.name === name);
+  }
+
+  // Update a specific key value within an existing secret
+  async setSecretKey(nameOrId, keyName, value) {
+    return this.put(`/secrets/${nameOrId}/keys/${keyName}`, {
+      value,
+      domainType: 'DOMAIN_TYPE_ORGANIZATION',
+    });
   }
 
   async getMe() { return this.get('/me'); }
